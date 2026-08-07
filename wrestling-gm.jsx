@@ -4,7 +4,7 @@ import {
   Star, AlertTriangle, Plus, X, ChevronRight, ChevronUp, ChevronDown,
   Activity, Shield, Mic, Radio, Heart, Zap, RefreshCw, Home,
   UserPlus, UserMinus, Award, Flame, Clock, MapPin, Ticket, Loader2, Check,
-  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2
+  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2, Palette, Newspaper
 } from 'lucide-react';
 
 /* ============================================================
@@ -18,16 +18,46 @@ const C = {
   ink: '#1B1712',
   inkSoft: '#26201A',
   inkFaint: '#3B332A',
-  rope: '#AC3A2C',
-  ropeDark: '#832A20',
-  gold: '#C4922E',
-  goldSoft: '#E2C377',
+  rope: 'var(--wgm-rope, #AC3A2C)',
+  ropeDark: 'var(--wgm-rope-dark, #832A20)',
+  gold: 'var(--wgm-gold, #C4922E)',
+  goldSoft: 'var(--wgm-gold-soft, #E2C377)',
   cream: '#F6F0E1',
   steel: '#4A5A5C',
   good: '#5C7A48',
   bad: '#AC3A2C',
   line: 'rgba(27,23,18,0.14)',
 };
+
+/* ---------- Theming ---------- */
+const THEME_PRESETS = [
+  { id: 'classic', name: 'Classic Gold', gold: '#C4922E', goldSoft: '#E2C377', rope: '#AC3A2C', ropeDark: '#832A20' },
+  { id: 'crimson', name: 'Crimson Steel', gold: '#8C96A0', goldSoft: '#B7BFC7', rope: '#8C1620', ropeDark: '#5E0F16' },
+  { id: 'cobalt', name: 'Cobalt Chrome', gold: '#4FA8D8', goldSoft: '#8FCBEA', rope: '#1C3D6B', ropeDark: '#14294A' },
+  { id: 'emerald', name: 'Emerald Reign', gold: '#4F9B5C', goldSoft: '#8CC998', rope: '#1F5C34', ropeDark: '#153F24' },
+  { id: 'violet', name: 'Royal Violet', gold: '#8E6BC4', goldSoft: '#B8A0DE', rope: '#4B2E7A', ropeDark: '#33205A' },
+  { id: 'inferno', name: 'Inferno Orange', gold: '#E08A2E', goldSoft: '#F0B268', rope: '#B33A1E', ropeDark: '#832910' },
+];
+const DEFAULT_THEME = { presetId: 'classic', ...THEME_PRESETS[0] };
+function hexToRgbTriplet(hex) {
+  const h = (hex || '#C4922E').replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16) || 0;
+  const g = parseInt(h.substring(2, 4), 16) || 0;
+  const b = parseInt(h.substring(4, 6), 16) || 0;
+  return `${r} ${g} ${b}`;
+}
+function shadeHex(hex, amt) {
+  const h = (hex || '#000000').replace('#', '');
+  const clampByte = (v) => Math.max(0, Math.min(255, v));
+  const r = clampByte(parseInt(h.substring(0, 2), 16) + amt);
+  const g = clampByte(parseInt(h.substring(2, 4), 16) + amt);
+  const b = clampByte(parseInt(h.substring(4, 6), 16) + amt);
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+}
+function themeCssVars(theme) {
+  const t = theme || DEFAULT_THEME;
+  return `:root{--wgm-gold:${t.gold};--wgm-gold-soft:${t.goldSoft};--wgm-rope:${t.rope};--wgm-rope-dark:${t.ropeDark};--wgm-gold-rgb:${hexToRgbTriplet(t.gold)};--wgm-rope-rgb:${hexToRgbTriplet(t.rope)};}`;
+}
 
 const FONT_STYLE = `
 @import url('https://fonts.googleapis.com/css2?family=Anton&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
@@ -73,13 +103,24 @@ const VENUE_TIERS = [
 
 const MATCH_TYPES = [
   { id: 'singles', label: 'Singles Match', minP: 2, maxP: 2, beatsRange: [6, 9], riskMult: 1.0, weight: { strike: 1, grapple: 1, aerial: 0.8, submission: 0.8, power: 0.8 } },
-  { id: 'tag', label: 'Tag Team Match', minP: 4, maxP: 4, beatsRange: [7, 10], riskMult: 1.0, weight: { strike: 1, grapple: 1, aerial: 1, submission: 0.6, power: 1 } },
+  { id: 'tag', label: 'Tag Team Match', minP: 4, maxP: 4, sides: true, beatsRange: [7, 10], riskMult: 1.0, weight: { strike: 1, grapple: 1, aerial: 1, submission: 0.6, power: 1 } },
   { id: 'triple', label: 'Triple Threat', minP: 3, maxP: 3, beatsRange: [7, 10], riskMult: 1.1, weight: { strike: 1.1, grapple: 0.8, aerial: 1, submission: 0.6, power: 1 } },
+  { id: 'fatal4way', label: 'Fatal Four-Way', minP: 4, maxP: 4, beatsRange: [8, 11], riskMult: 1.15, weight: { strike: 1.1, grapple: 0.7, aerial: 1.1, submission: 0.5, power: 1.1 } },
   { id: 'ladder', label: 'Ladder Match', minP: 2, maxP: 4, beatsRange: [8, 12], riskMult: 1.6, weight: { strike: 0.6, grapple: 0.4, aerial: 1.6, submission: 0.1, power: 1.3 } },
   { id: 'cage', label: 'Steel Cage Match', minP: 2, maxP: 2, beatsRange: [7, 10], riskMult: 1.4, weight: { strike: 1.3, grapple: 1, aerial: 0.6, submission: 0.7, power: 1.2 } },
   { id: 'submission', label: 'Submission Match', minP: 2, maxP: 2, beatsRange: [6, 9], riskMult: 0.9, weight: { strike: 0.5, grapple: 1, aerial: 0.3, submission: 1.8, power: 0.6 } },
   { id: 'hardcore', label: 'Hardcore / No DQ', minP: 2, maxP: 3, beatsRange: [7, 11], riskMult: 1.5, weight: { strike: 1.5, grapple: 0.8, aerial: 1, submission: 0.4, power: 1.4 } },
 ];
+
+/* ---------- Researchable match types (R&D) ---------- */
+const RESEARCHABLE_MATCH_TYPES = [
+  { id: 'sixman', label: 'Six-Man Tag Team Match', minP: 6, maxP: 6, sides: true, sideSize: 3, beatsRange: [9, 13], riskMult: 1.05, weight: { strike: 1, grapple: 0.9, aerial: 1.1, submission: 0.5, power: 1 }, researchCost: 6000, researchWeeks: 3, minRep: 15, desc: '3-on-3 tag warfare. More chaos, more chemistry to manage.' },
+  { id: 'laststanding', label: 'Last Man Standing', minP: 2, maxP: 2, beatsRange: [8, 12], riskMult: 1.3, weight: { strike: 1.4, grapple: 0.9, aerial: 0.7, submission: 0.3, power: 1.3 }, researchCost: 4000, researchWeeks: 2, minRep: 20, desc: 'No pin, no submission — just survive the count.' },
+  { id: 'ironman', label: 'Iron Man Match', minP: 2, maxP: 2, beatsRange: [14, 20], riskMult: 1.15, weight: { strike: 1, grapple: 1.2, aerial: 0.9, submission: 1, power: 0.9 }, researchCost: 7000, researchWeeks: 3, minRep: 30, desc: 'An extended battle of attrition — the longest match on the card.' },
+  { id: 'tlc', label: 'TLC Match', minP: 2, maxP: 4, beatsRange: [9, 13], riskMult: 1.7, weight: { strike: 0.6, grapple: 0.3, aerial: 1.5, submission: 0.1, power: 1.4 }, researchCost: 9000, researchWeeks: 4, minRep: 35, requiresWeapons: ['ladders', 'tables'], desc: 'Tables, Ladders, and Chairs — the ultimate spectacle. Requires ladders and tables in your weapons stash.' },
+  { id: 'rumble', label: 'Royal Rumble', minP: 6, maxP: 10, beatsRange: [12, 18], riskMult: 1.1, weight: { strike: 1, grapple: 0.6, aerial: 0.9, submission: 0.3, power: 1.2 }, researchCost: 12000, researchWeeks: 5, minRep: 45, desc: 'A chaotic multi-man spectacle fans love once a year.' },
+];
+const ALL_MATCH_TYPES = [...MATCH_TYPES, ...RESEARCHABLE_MATCH_TYPES];
 
 const FINISH_TYPES = [
   { id: 'clean', label: 'Clean Finish', qualityMod: 0.3 },
@@ -142,6 +183,30 @@ const STYLE_CONFIG = {
   deathmatch: { label: 'Deathmatch / Hardcore', blurb: 'Weapons, blood, and no rules.', statBias: { strength: 6, stamina: 6 }, preferredTypes: ['hardcore', 'ladder', 'cage'], adj: ['Bloody', 'Barbed', 'Savage', 'Feral', 'Rotten', 'Unhinged'], noun: ['Butcher', 'Maniac', 'Reaper', 'Psycho', 'Junkyard', 'Wretch'], prefix: 'The' },
 };
 const STYLE_LIST = Object.keys(STYLE_CONFIG).map((id) => ({ id, ...STYLE_CONFIG[id] }));
+
+/* ---------- Premade companies ---------- */
+const PRESET_COMPANIES = [
+  { id: 'ironbelt', name: 'Ironbelt Wrestling', region: 'usa', style: 'sports_entertainment', blurb: 'A scrappy East Coast promotion looking to make noise.' },
+  { id: 'luchamundo', name: 'Lucha Mundo', region: 'mexico', style: 'lucha', blurb: 'High-flying trios action straight out of Mexico City.' },
+  { id: 'kabukikai', name: 'Kabuki-Kai Puroresu', region: 'japan', style: 'strong_style', blurb: 'Discipline and stiff strikes from the Tokyo dojo scene.' },
+  { id: 'ravensworth', name: 'Ravensworth Grappling', region: 'uk', style: 'british', blurb: "Working men's clubs, technical wrestling, no frills." },
+  { id: 'deadendcombat', name: 'Dead End Combat', region: 'usa', style: 'deathmatch', blurb: 'Blood, thumbtacks, and a devoted cult following.', fundsTierId: 'shoestring' },
+  { id: 'outbackxtreme', name: 'Outback Xtreme', region: 'australia', style: 'sports_entertainment', blurb: 'An underserved market with room to grow fast.', fundsTierId: 'wellfunded' },
+];
+
+/* ---------- World builder ---------- */
+const RIVAL_COUNT_OPTIONS = [3, 5, 8, 12];
+const FUNDS_TIERS = [
+  { id: 'shoestring', label: 'Shoestring', funds: 8000, blurb: 'A tight budget. Every dollar matters.' },
+  { id: 'standard', label: 'Standard', funds: 15000, blurb: 'A fair starting point.' },
+  { id: 'wellfunded', label: 'Well-Funded', funds: 30000, blurb: 'Room to invest early.' },
+  { id: 'rich', label: 'Rich', funds: 60000, blurb: 'Deep pockets from day one.' },
+];
+const DIFFICULTY_CONFIG = {
+  easy: { id: 'easy', label: 'Easy', expenseMult: 0.85, revenueMult: 1.1, blurb: 'Lower costs, friendlier crowds.' },
+  normal: { id: 'normal', label: 'Normal', expenseMult: 1, revenueMult: 1, blurb: 'The standard experience.' },
+  hard: { id: 'hard', label: 'Hard', expenseMult: 1.15, revenueMult: 0.9, blurb: 'Tighter margins, tougher crowds.' },
+};
 
 /* ---------- Titles ---------- */
 const TITLE_CREATION_COST = 1000;
@@ -357,6 +422,35 @@ const nextLockedVenue = (rep) => VENUE_TIERS.find((v) => v.minRep > rep);
 /* ============================================================
    WRESTLER / STAFF GENERATION
    ============================================================ */
+/* ---------- Ambitions & aspirations ---------- */
+const WRESTLER_AMBITIONS = [
+  { type: 'win_title', label: 'Become a Champion' },
+  { type: 'main_event', label: 'Headline a Major Show' },
+  { type: 'beat_rival', label: 'Prove themselves against a rival' },
+  { type: 'lead_stable', label: 'Lead Their Own Stable' },
+  { type: 'tag_gold', label: 'Capture Tag Team Gold' },
+  { type: 'merch_star', label: "Become the Company's Top Seller" },
+  { type: 'iron_man', label: 'Wrestle 50 Matches for the Promotion' },
+];
+const STAFF_AMBITIONS = [
+  { type: 'raise', label: 'Earn a Raise' },
+  { type: 'marquee', label: 'Call a Show at a Marquee Venue' },
+  { type: 'longevity', label: 'Become a Company Fixture' },
+];
+function assignAmbition(pool, roster, selfId) {
+  const choice = pick(pool);
+  let targetId = null, targetName = null;
+  if (choice.type === 'beat_rival') {
+    const candidates = (roster || []).filter((r) => r.id !== selfId);
+    if (!candidates.length) return assignAmbition(pool.filter((p) => p.type !== 'beat_rival').length ? pool.filter((p) => p.type !== 'beat_rival') : [pool[0]], roster, selfId);
+    const t = pick(candidates);
+    targetId = t.id; targetName = t.name;
+  }
+  return { type: choice.type, label: choice.label, targetId, targetName, satisfaction: 65, status: 'content', pendingRequest: null, weeksSinceAssigned: 0 };
+}
+const assignWrestlerAmbition = () => assignAmbition(WRESTLER_AMBITIONS.filter((a) => a.type !== 'beat_rival'), null, null);
+const assignStaffAmbition = () => assignAmbition(STAFF_AMBITIONS, null, null);
+
 function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainment') {
   const cfg = TIER_CONFIG[tier];
   const style = STYLE_CONFIG[styleId] || STYLE_CONFIG.sports_entertainment;
@@ -384,17 +478,20 @@ function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainmen
     contractWeeksLeft: randInt(12, 30),
     traits: assignTraits(),
     age: randInt(cfg.ageRange[0], cfg.ageRange[1]),
+    ambition: assignWrestlerAmbition(),
+    merchEarnings: 0,
+    matchesWrestled: 0,
   };
 }
 
 function generateStaff(role) {
   const quality = randInt(35, 92);
-  return { id: uid(), name: `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`, role, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait() };
+  return { id: uid(), name: `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`, role, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait(), ambition: assignStaffAmbition(), weeksEmployed: 0 };
 }
 
-function generateFreeAgentPool(regionId = 'usa', styleId = 'sports_entertainment') {
+function generateFreeAgentPool(regionId = 'usa', styleId = 'sports_entertainment', count = 14) {
   const roll = () => { const r = Math.random(); return r < 0.55 ? 'Mid-Card' : r < 0.82 ? 'Rookie' : r < 0.96 ? 'Star' : 'Legend'; };
-  return Array.from({ length: 6 }, () => generateWrestler(roll(), regionId, styleId));
+  return Array.from({ length: count }, () => generateWrestler(roll(), regionId, styleId));
 }
 
 /* ---------- Title helpers ---------- */
@@ -447,12 +544,25 @@ function createStableObject(name, leaderId, memberIds, week, year) {
 /* ---------- Feuds ---------- */
 const FEUD_HEAT_DECAY = 3;
 const FEUD_PROMO_HEAT = { 'Call-Out': 8, 'Confrontation': 10, 'Contract Signing': 4, 'Celebration': 2, 'Backstage Interview': 5 };
+const FEUD_HOOKS = [
+  'A backstage altercation that spilled into the parking lot.',
+  'One accused the other of disrespecting the business.',
+  'A title match gone wrong — accusations of a fast count.',
+  'A broken promise between former tag partners.',
+  "A jealous rival who can't stand playing second fiddle.",
+  'An interview that went too far, calling out family.',
+  'A costly bit of interference in a crucial match.',
+  'Simple, old-fashioned professional jealousy.',
+  'A mentor who feels betrayed by their protégé.',
+  "Two names the fans just won't stop comparing.",
+];
 
 function createFeudObject(aId, aName, bId, bName, week, year) {
+  const hook = pick(FEUD_HOOKS);
   return {
-    id: uid(), aId, aName, bId, bName, heat: 15, status: 'active', matchCount: 0,
+    id: uid(), aId, aName, bId, bName, heat: 15, status: 'active', matchCount: 0, hook,
     startWeek: week, startYear: year,
-    log: [{ week, year, text: `${aName} and ${bName} start a rivalry.` }],
+    log: [{ week, year, text: `${aName} and ${bName} start a rivalry — ${hook}` }],
   };
 }
 function feudPairPresent(feud, participantIds) {
@@ -484,13 +594,59 @@ function advanceFeudFromPromo(feud, purpose, week, year) {
   return { ...feud, heat, log: log.slice(-14) };
 }
 
+/* ---------- Ambition fulfillment & escalation ---------- */
+function checkWrestlerAmbitionFulfilled(wrestler, amb, ctx) {
+  switch (amb.type) {
+    case 'win_title': return ctx.nextTitles.some((t) => t.holderIds.includes(wrestler.id));
+    case 'main_event': {
+      const last = ctx.cardOrder[ctx.cardOrder.length - 1];
+      return !!last && ctx.venue && last.kind === 'match' && last.participantIds.includes(wrestler.id) && ['midsize', 'sports', 'stadium'].includes(ctx.venue.id);
+    }
+    case 'beat_rival': return ctx.matchResults.some((m) => m.winnerIds.includes(wrestler.id) && m.participantIds.includes(amb.targetId) && !m.winnerIds.includes(amb.targetId) && (m.titleId || m.feudBlowOffId));
+    case 'lead_stable': return ctx.nextStables.some((s) => s.leaderId === wrestler.id);
+    case 'tag_gold': return ctx.nextTitles.some((t) => t.isTag && t.holderIds.includes(wrestler.id));
+    case 'merch_star': return wrestler.merchEarnings >= 5000;
+    case 'iron_man': return wrestler.matchesWrestled >= 50;
+    default: return false;
+  }
+}
+function checkStaffAmbitionFulfilled(staffMember, amb, ctx) {
+  switch (amb.type) {
+    case 'marquee': return !!ctx.venue && ['midsize', 'sports', 'stadium'].includes(ctx.venue.id);
+    case 'longevity': return staffMember.weeksEmployed >= 40;
+    default: return false; // 'raise' is fulfilled directly via the Give Raise action
+  }
+}
+function tickAmbition(subject, amb, fulfilled, pool, roster) {
+  if (fulfilled) {
+    const nextAmb = assignAmbition(pool, roster, subject.id);
+    return { ambition: { ...nextAmb, satisfaction: 80 }, news: `${subject.name} fulfilled their ambition to ${amb.label.toLowerCase()}!` };
+  }
+  const weeksSinceAssigned = amb.weeksSinceAssigned + 1;
+  const decay = weeksSinceAssigned > 15 ? 2.5 : weeksSinceAssigned > 8 ? 1 : 0.3;
+  const satisfaction = clamp(amb.satisfaction - decay, 0, 100);
+  let status = amb.status;
+  let pendingRequest = amb.pendingRequest;
+  let news = null;
+  if (satisfaction < 20 && status !== 'holdout') {
+    status = 'holdout';
+    news = `${subject.name} has gone on a quiet holdout, refusing to be booked until their concerns are addressed.`;
+  } else if (satisfaction < 40 && status === 'content') {
+    status = 'unhappy';
+    pendingRequest = { text: `Wants meaningful progress toward: ${amb.label}.` };
+    news = `${subject.name} has voiced frustration about their career direction.`;
+  } else if (satisfaction >= 40) {
+    status = 'content'; pendingRequest = null;
+  }
+  return { ambition: { ...amb, satisfaction, status, pendingRequest, weeksSinceAssigned }, news };
+}
 /* ---------- TV deals ---------- */
 const TV_NETWORKS = [
-  { id: 'access', name: 'Public Access', minRep: 0, weeklyFee: 200, ratingReq: 0, weeks: 12, fillBonus: 0.01 },
-  { id: 'regional', name: 'Regional Cable', minRep: 20, weeklyFee: 800, ratingReq: 2.0, weeks: 16, fillBonus: 0.03 },
-  { id: 'national', name: 'National Cable', minRep: 40, weeklyFee: 3000, ratingReq: 2.75, weeks: 20, fillBonus: 0.06 },
-  { id: 'premium', name: 'Premium Network', minRep: 65, weeklyFee: 9000, ratingReq: 3.25, weeks: 26, fillBonus: 0.1 },
-  { id: 'global', name: 'Global Streaming', minRep: 85, weeklyFee: 25000, ratingReq: 3.5, weeks: 30, fillBonus: 0.15 },
+  { id: 'access', name: 'Public Access', minRep: 12, weeklyFee: 200, ratingReq: 0, weeks: 12, fillBonus: 0.01 },
+  { id: 'regional', name: 'Regional Cable', minRep: 25, weeklyFee: 800, ratingReq: 2.0, weeks: 16, fillBonus: 0.03 },
+  { id: 'national', name: 'National Cable', minRep: 45, weeklyFee: 3000, ratingReq: 2.75, weeks: 20, fillBonus: 0.06 },
+  { id: 'premium', name: 'Premium Network', minRep: 68, weeklyFee: 9000, ratingReq: 3.25, weeks: 26, fillBonus: 0.1 },
+  { id: 'global', name: 'Global Streaming', minRep: 88, weeklyFee: 25000, ratingReq: 3.5, weeks: 30, fillBonus: 0.15 },
 ];
 const TV_STRIKE_LIMIT = 3;
 function tvNetworkFor(company) {
@@ -538,12 +694,31 @@ function retirementChance(age) {
   return clamp((age - 37) * 0.05, 0, 0.65);
 }
 
+/* ---------- Wrestling media / monthly recaps ---------- */
+function generateMonthlyRecap(slice, roster, monthNum, year) {
+  const shows = slice.length;
+  const avgStars = shows ? average(slice.map((h) => h.avgStars)) : 0;
+  const totalAttendance = sum(slice.map((h) => h.attendance));
+  const totalRevenue = sum(slice.map((h) => h.revenue));
+  const totalProfit = sum(slice.map((h) => h.netProfit));
+  const allMatches = slice.flatMap((h) => h.matches.map((m) => ({ ...m, week: h.week })));
+  const topMatch = allMatches.length ? allMatches.reduce((best, m) => (m.stars > best.stars ? m : best), allMatches[0]) : null;
+  const titleChanges = allMatches.filter((m) => m.titleChanged).map((m) => ({ label: m.label, titleName: m.titleName, winner: m.winner, week: m.week }));
+  const powerRankings = [...roster].sort((a, b) => b.popularity - a.popularity).slice(0, 5).map((w) => ({ id: w.id, name: w.name, popularity: w.popularity, gimmick: w.gimmick }));
+  return {
+    id: uid(), month: monthNum, year, shows,
+    avgStars: Number(avgStars.toFixed(2)), totalAttendance, totalRevenue, totalProfit,
+    topMatch: topMatch ? { label: topMatch.label, stars: topMatch.stars, week: topMatch.week } : null,
+    titleChanges, powerRankings,
+  };
+}
+
 /* ============================================================
    MATCH ENGINE
    ============================================================ */
 function simulateMatch(match, wrestlerLookup, tagTeams = [], upgrades = {}, feuds = []) {
   const participants = match.participantIds.map((id) => wrestlerLookup[id]).filter(Boolean);
-  const matchType = MATCH_TYPES.find((m) => m.id === match.typeId) || MATCH_TYPES[0];
+  const matchType = ALL_MATCH_TYPES.find((m) => m.id === match.typeId) || MATCH_TYPES[0];
   const ringTier = UPGRADES.ring.levels[(upgrades.ring || 1) - 1];
   const ringShapeBonus = upgrades.ringShapeBonus || 0;
   const weaponsFx = weaponsEffectFor(matchType.id, upgrades.weaponsOwned);
@@ -560,7 +735,10 @@ function simulateMatch(match, wrestlerLookup, tagTeams = [], upgrades = {}, feud
   for (let i = 0; i < beatsCount; i++) {
     if (participants.length < 2) break;
     const performer = weightedPick(participants, (p) => Math.max(5, p.stats.charisma * 0.5 + p.condition * 0.5));
-    const opponents = participants.filter((p) => p.id !== performer.id);
+    const performerSide = match.sides ? match.sides.find((side) => side.includes(performer.id)) : null;
+    const opponents = performerSide
+      ? participants.filter((p) => !performerSide.includes(p.id))
+      : participants.filter((p) => p.id !== performer.id);
     const opponent = weightedPick(opponents, (o) => Math.max(5, o.stats.technical));
     const spot = weightedPick(SPOT_TYPES, (s) => (matchType.weight[s.id] || 0.5) * statScore(performer, s.statWeight));
     const performerScore = statScore(performer, spot.statWeight) * (performer.condition / 100) * (1 + momentum * 0.15);
@@ -659,17 +837,19 @@ function computeFillFactors(draftShow, game) {
 
 function estimateShow(draftShow, game) {
   const { venue, fillRate, attendance, payroll, effectiveRent } = computeFillFactors(draftShow, game);
+  const diff = DIFFICULTY_CONFIG[game.company.difficulty] || DIFFICULTY_CONFIG.normal;
   const concessions = computeConcessionsRevenue(game.company, attendance);
   const merch = computeMerchResult(game.company, game.roster, attendance).net;
   const tvNetwork = tvNetworkFor(game.company);
   const tv = tvNetwork ? tvNetwork.weeklyFee : 0;
-  const revenue = attendance * draftShow.ticketPrice + concessions + merch + tv;
-  const expenses = effectiveRent + draftShow.marketingBudget + payroll;
+  const revenue = (attendance * draftShow.ticketPrice + concessions + merch + tv) * diff.revenueMult;
+  const expenses = (effectiveRent + draftShow.marketingBudget + payroll) * diff.expenseMult;
   return { attendance, capacity: venue.capacity, revenue, expenses, profit: revenue - expenses, fillRate, venue };
 }
 
 function simulateShow(draftShow, game) {
   const { venue, fillRate, attendance, payroll, effectiveRent } = computeFillFactors(draftShow, game);
+  const diff = DIFFICULTY_CONFIG[game.company.difficulty] || DIFFICULTY_CONFIG.normal;
   const wrestlerLookup = {};
   game.roster.forEach((w) => { wrestlerLookup[w.id] = w; });
 
@@ -681,14 +861,14 @@ function simulateShow(draftShow, game) {
   const matchResults = draftShow.card.filter((s) => s.kind === 'match').map((m) => ({ ...m, result: simulateMatch(m, wrestlerLookup, game.tagTeams, matchUpgrades, game.feuds) }));
   const promoResults = draftShow.card.filter((s) => s.kind === 'promo').map((p) => ({ ...p, pop: computePromoPop(p, wrestlerLookup) }));
 
-  const ticketRevenue = attendance * draftShow.ticketPrice;
-  const concessionsRevenue = computeConcessionsRevenue(game.company, attendance);
+  const ticketRevenue = Math.round(attendance * draftShow.ticketPrice * diff.revenueMult);
+  const concessionsRevenue = Math.round(computeConcessionsRevenue(game.company, attendance) * diff.revenueMult);
   const merchResult = computeMerchResult(game.company, game.roster, attendance);
-  const merchRevenue = merchResult.net;
+  const merchRevenue = Math.round(merchResult.net * diff.revenueMult);
   const tvNetwork = tvNetworkFor(game.company);
-  const tvRevenue = tvNetwork ? tvNetwork.weeklyFee : 0;
+  const tvRevenue = tvNetwork ? Math.round(tvNetwork.weeklyFee * diff.revenueMult) : 0;
   const revenue = ticketRevenue + concessionsRevenue + merchRevenue + tvRevenue;
-  const expenses = effectiveRent + draftShow.marketingBudget + payroll;
+  const expenses = Math.round((effectiveRent + draftShow.marketingBudget + payroll) * diff.expenseMult);
   const netProfit = revenue - expenses;
 
   const avgStars = matchResults.length ? average(matchResults.map((m) => m.result.finalStars)) : 2.5;
@@ -708,14 +888,18 @@ function makeEmptyDraft() {
   return { venueId: 'gym', ticketPrice: 20, marketingBudget: 0, card: [] };
 }
 
-function createNewGame(name, regionId, styleId) {
+function createNewGame(opts) {
+  const { name, regionId, styleId, rivalCount = 5, fundsTierId = 'standard', difficultyId = 'normal', theme } = opts || {};
   const region = regionId || 'usa';
   const style = styleId || 'sports_entertainment';
   const styleLabel = (STYLE_CONFIG[style] || STYLE_CONFIG.sports_entertainment).label;
   const regionLabel = (REGION_LIST.find((r) => r.id === region) || REGION_LIST[0]).label;
+  const fundsTier = FUNDS_TIERS.find((f) => f.id === fundsTierId) || FUNDS_TIERS[1];
+  const resolvedTheme = theme || DEFAULT_THEME;
   return {
     company: {
-      name: name || 'Independent Wrestling', funds: 15000, reputation: 5, week: 1, year: 1, region, style,
+      name: name || 'Independent Wrestling', funds: fundsTier.funds, reputation: 5, week: 1, year: 1, region, style,
+      difficulty: difficultyId, theme: resolvedTheme,
       upgrades: { ...DEFAULT_UPGRADES },
       ringShape: DEFAULT_RING_SHAPE,
       ringShapesOwned: [DEFAULT_RING_SHAPE],
@@ -723,6 +907,7 @@ function createNewGame(name, regionId, styleId) {
       merchMenu: [],
       weaponsOwned: [],
       tvDeal: null,
+      matchResearch: { unlockedTypes: [], inProgress: null },
     },
     roster: [
       ...Array.from({ length: 3 }, () => generateWrestler('Rookie', region, style)),
@@ -735,7 +920,8 @@ function createNewGame(name, regionId, styleId) {
     tagTeams: [],
     stables: [],
     feuds: [],
-    rivals: generateRivalPromotions(),
+    rivals: generateRivalPromotions(rivalCount),
+    mediaRecaps: [],
     history: [],
     news: [`Welcome to ${regionLabel}. Booking in the ${styleLabel} tradition — book your first show to get the doors open.`],
     draftShow: makeEmptyDraft(),
@@ -750,8 +936,8 @@ function normalizeGame(loaded) {
     const titleId = item.titleId !== undefined ? item.titleId : null;
     return { ...item, winnerIds, titleId };
   });
-  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36) });
-  const fixStaff = (s) => ({ ...s, trait: s.trait !== undefined ? s.trait : null });
+  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: w.ambition || assignWrestlerAmbition(), merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0 });
+  const fixStaff = (s) => ({ ...s, trait: s.trait !== undefined ? s.trait : null, ambition: s.ambition || assignStaffAmbition(), weeksEmployed: s.weeksEmployed || 0 });
   const loadedCompany = loaded.company || {};
   const oldUpgrades = loadedCompany.upgrades || {};
   const migratedWeapons = loadedCompany.weaponsOwned || (oldUpgrades.weapons ? ['chairs', 'tables'] : []);
@@ -760,6 +946,8 @@ function normalizeGame(loaded) {
     company: {
       region: 'usa', style: 'sports_entertainment',
       ...loadedCompany,
+      difficulty: loadedCompany.difficulty || 'normal',
+      theme: loadedCompany.theme || DEFAULT_THEME,
       upgrades: { ring: oldUpgrades.ring || 1, production: oldUpgrades.production || 1, medical: oldUpgrades.medical || 1, transport: oldUpgrades.transport || 1 },
       ringShape: loadedCompany.ringShape || DEFAULT_RING_SHAPE,
       ringShapesOwned: loadedCompany.ringShapesOwned || [DEFAULT_RING_SHAPE],
@@ -767,12 +955,14 @@ function normalizeGame(loaded) {
       merchMenu: loadedCompany.merchMenu || [],
       weaponsOwned: migratedWeapons,
       tvDeal: loadedCompany.tvDeal || null,
+      matchResearch: loadedCompany.matchResearch || { unlockedTypes: [], inProgress: null },
     },
     titles: loaded.titles || [],
     tagTeams: loaded.tagTeams || [],
     stables: loaded.stables || [],
     feuds: loaded.feuds || [],
     rivals: loaded.rivals || generateRivalPromotions(),
+    mediaRecaps: loaded.mediaRecaps || [],
     roster: (loaded.roster || []).map(fixWrestler),
     freeAgents: (loaded.freeAgents || []).map(fixWrestler),
     staff: {
@@ -897,9 +1087,18 @@ export default function WrestlingGM() {
   const [game, setGame] = useState(null);
   const [loading, setLoading] = useState(true);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [setupMode, setSetupMode] = useState(''); // '' | 'preset' | 'custom'
+  const [setupPresetId, setSetupPresetId] = useState('');
   const [setupName, setSetupName] = useState('');
   const [setupRegion, setSetupRegion] = useState('');
   const [setupStyle, setSetupStyle] = useState('');
+  const [setupRivalCount, setSetupRivalCount] = useState(5);
+  const [setupFundsTierId, setSetupFundsTierId] = useState('standard');
+  const [setupDifficultyId, setSetupDifficultyId] = useState('normal');
+  const [setupThemeMode, setSetupThemeMode] = useState('preset'); // 'preset' | 'custom'
+  const [setupThemePresetId, setSetupThemePresetId] = useState('classic');
+  const [setupCustomGold, setSetupCustomGold] = useState('#C4922E');
+  const [setupCustomRope, setSetupCustomRope] = useState('#AC3A2C');
   const [tab, setTab] = useState('dashboard');
   const [rosterSubTab, setRosterSubTab] = useState('active');
   const [selectedWrestler, setSelectedWrestler] = useState(null);
@@ -916,6 +1115,7 @@ export default function WrestlingGM() {
   const [upgradesModalOpen, setUpgradesModalOpen] = useState(false);
   const [tvModalOpen, setTvModalOpen] = useState(false);
   const [rivalsModalOpen, setRivalsModalOpen] = useState(false);
+  const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [toast, setToast] = useState(null);
 
@@ -949,13 +1149,22 @@ export default function WrestlingGM() {
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(null), 2600); }
 
   function startNewGame() {
-    const g = createNewGame(setupName.trim(), setupRegion, setupStyle);
+    const chosenTheme = setupThemeMode === 'custom'
+      ? { presetId: 'custom', gold: setupCustomGold, goldSoft: shadeHex(setupCustomGold, 45), rope: setupCustomRope, ropeDark: shadeHex(setupCustomRope, -25) }
+      : { presetId: setupThemePresetId, ...(THEME_PRESETS.find((t) => t.id === setupThemePresetId) || THEME_PRESETS[0]) };
+    const g = createNewGame({
+      name: setupName.trim(), regionId: setupRegion, styleId: setupStyle,
+      rivalCount: setupRivalCount, fundsTierId: setupFundsTierId, difficultyId: setupDifficultyId,
+      theme: chosenTheme,
+    });
     setGame(g); persist(g); setNeedsSetup(false);
   }
 
   function resetGame() {
     setGame(null); setConfirmAction(null); setTab('dashboard');
-    setSetupName(''); setSetupRegion(''); setSetupStyle('');
+    setSetupMode(''); setSetupPresetId(''); setSetupName(''); setSetupRegion(''); setSetupStyle('');
+    setSetupRivalCount(5); setSetupFundsTierId('standard'); setSetupDifficultyId('normal');
+    setSetupThemeMode('preset'); setSetupThemePresetId('classic');
     setNeedsSetup(true);
   }
 
@@ -992,6 +1201,44 @@ export default function WrestlingGM() {
     });
     showToast('Contract renewed.');
   }
+  function grantAmbitionRequest(id) {
+    updateGame((g) => {
+      const w = g.roster.find((r) => r.id === id);
+      if (!w || !w.ambition || !w.ambition.pendingRequest) return g;
+      const cost = 1500;
+      if (g.company.funds < cost) { showToast('Not enough funds to address this.'); return g; }
+      return {
+        ...g,
+        company: { ...g.company, funds: g.company.funds - cost },
+        roster: g.roster.map((r) => (r.id === id ? { ...r, ambition: { ...r.ambition, satisfaction: clamp(r.ambition.satisfaction + 35, 0, 100), status: 'content', pendingRequest: null } } : r)),
+      };
+    });
+    showToast('Request addressed.');
+  }
+  function giveStaffRaise(role, id) {
+    const key = role === 'Announcer' ? 'announcers' : 'commentators';
+    updateGame((g) => {
+      const s = g.staff[key].find((x) => x.id === id);
+      if (!s) return g;
+      const cost = Math.round(s.salary * 3);
+      if (g.company.funds < cost) { showToast('Not enough funds for a raise.'); return g; }
+      const fulfillsAmbition = s.ambition && s.ambition.type === 'raise';
+      return {
+        ...g,
+        company: { ...g.company, funds: g.company.funds - cost },
+        staff: {
+          ...g.staff,
+          [key]: g.staff[key].map((x) => (x.id === id ? {
+            ...x,
+            salary: Math.round(x.salary * 1.15),
+            quality: clamp(x.quality + 2, 1, 100),
+            ambition: fulfillsAmbition ? { ...assignStaffAmbition(), satisfaction: 80 } : { ...x.ambition, satisfaction: clamp(x.ambition.satisfaction + 20, 0, 100), status: x.ambition.satisfaction + 20 >= 40 ? 'content' : x.ambition.status, pendingRequest: x.ambition.satisfaction + 20 >= 40 ? null : x.ambition.pendingRequest },
+          } : x)),
+        },
+      };
+    });
+    showToast('Gave a raise.');
+  }
   function signFreeAgent(id) {
     updateGame((g) => {
       const w = g.freeAgents.find((f) => f.id === id);
@@ -1012,7 +1259,9 @@ export default function WrestlingGM() {
   function scoutTalent() {
     updateGame((g) => {
       if (g.company.funds < 500) { showToast('Need $500 to scout new talent.'); return g; }
-      return { ...g, company: { ...g.company, funds: g.company.funds - 500 }, freeAgents: generateFreeAgentPool(g.company.region, g.company.style) };
+      if (g.freeAgents.length >= 30) { showToast('Free agent pool is full — sign a few before scouting more.'); return g; }
+      const additions = generateFreeAgentPool(g.company.region, g.company.style, 8);
+      return { ...g, company: { ...g.company, funds: g.company.funds - 500 }, freeAgents: [...g.freeAgents, ...additions] };
     });
   }
 
@@ -1199,6 +1448,28 @@ export default function WrestlingGM() {
     showToast('Added to the weapons stash.');
   }
 
+  /* ---------- Match type research ---------- */
+  function startMatchResearch(typeId) {
+    updateGame((g) => {
+      if (g.company.matchResearch.inProgress) { showToast('Already researching a match type.'); return g; }
+      const def = RESEARCHABLE_MATCH_TYPES.find((t) => t.id === typeId);
+      if (!def || g.company.matchResearch.unlockedTypes.includes(typeId)) return g;
+      if (g.company.reputation < def.minRep) { showToast('Reputation too low for this research.'); return g; }
+      if (def.requiresWeapons && !def.requiresWeapons.every((w) => g.company.weaponsOwned.includes(w))) { showToast('Missing required weapons for this match type.'); return g; }
+      if (g.company.funds < def.researchCost) { showToast('Not enough funds to start research.'); return g; }
+      return {
+        ...g,
+        company: {
+          ...g.company,
+          funds: g.company.funds - def.researchCost,
+          matchResearch: { ...g.company.matchResearch, inProgress: { typeId, weeksRemaining: def.researchWeeks, totalWeeks: def.researchWeeks } },
+        },
+        news: [`Research begins on the ${def.label}.`, ...g.news].slice(0, 30),
+      };
+    });
+    showToast('Research started.');
+  }
+
   /* ---------- Staff actions ---------- */
   function hireStaff(role, id) {
     const key = role === 'Announcer' ? 'announcers' : 'commentators';
@@ -1254,14 +1525,15 @@ export default function WrestlingGM() {
         const isWinner = m.winnerIds.includes(pid);
         let popGain = Math.round(2 + perf.points * 4 + (isWinner ? 3 : 0) + m.result.finalStars * 1.5);
         if (hasTrait(w, 'natural')) popGain = Math.round(popGain * 1.3);
-        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0 };
+        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0 };
         wrestlerUpdates[pid].popDelta += popGain;
+        wrestlerUpdates[pid].matchInc += 1;
         let moraleDelta = isWinner ? 4 : (m.result.finalStars >= 3 ? 1 : -3);
         if (!isWinner && hasTrait(w, 'prima_donna')) moraleDelta -= 3;
         wrestlerUpdates[pid].moraleDelta += moraleDelta;
       });
       m.result.injuries.forEach((inj) => {
-        if (!wrestlerUpdates[inj.wrestlerId]) wrestlerUpdates[inj.wrestlerId] = { popDelta: 0, moraleDelta: 0 };
+        if (!wrestlerUpdates[inj.wrestlerId]) wrestlerUpdates[inj.wrestlerId] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0 };
         const injuredWrestler = game.roster.find((r) => r.id === inj.wrestlerId);
         const healMult = currentTier(game.company, 'medical').healMult * (hasTrait(injuredWrestler, 'iron_constitution') ? 0.6 : 1);
         const weeksLeft = Math.max(1, Math.round(inj.weeksLeft * healMult));
@@ -1270,14 +1542,15 @@ export default function WrestlingGM() {
     });
     result.promoResults.forEach((p) => {
       p.participantIds.forEach((pid) => {
-        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0 };
+        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0 };
         wrestlerUpdates[pid].popDelta += Math.round(p.pop / 12);
         wrestlerUpdates[pid].moraleDelta += 1;
       });
     });
     Object.entries(result.merchRoyalties || {}).forEach(([wid, amount]) => {
-      if (!wrestlerUpdates[wid]) wrestlerUpdates[wid] = { popDelta: 0, moraleDelta: 0 };
+      if (!wrestlerUpdates[wid]) wrestlerUpdates[wid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0 };
       wrestlerUpdates[wid].moraleDelta += clamp(Math.round(amount / 150), 0, 5);
+      wrestlerUpdates[wid].merchEarned += amount;
     });
 
     const onCardIds = new Set([
@@ -1306,6 +1579,8 @@ export default function WrestlingGM() {
         popularity: clamp(w.popularity + (upd ? upd.popDelta : 0), 0, 100),
         morale: clamp(w.morale + (upd ? upd.moraleDelta : 0) + passiveMorale - (contractWeeksLeft === 0 ? 5 : 0), 0, 100),
         condition, injury, contractWeeksLeft,
+        matchesWrestled: w.matchesWrestled + (upd ? upd.matchInc || 0 : 0),
+        merchEarnings: w.merchEarnings + (upd ? upd.merchEarned || 0 : 0),
       };
     });
 
@@ -1361,7 +1636,7 @@ export default function WrestlingGM() {
       return ticked;
     });
 
-    const nextTagTeams = game.tagTeams
+    let nextTagTeams = game.tagTeams
       .map((t) => {
         const teamedUp = result.matchResults.some((m) => t.memberIds.every((id) => m.participantIds.includes(id)));
         if (teamedUp) {
@@ -1376,7 +1651,7 @@ export default function WrestlingGM() {
 
     const allSegments = [...result.matchResults.map((m) => m.participantIds), ...result.promoResults.map((p) => p.participantIds)];
     let stableRepBonus = 0;
-    const nextStables = game.stables
+    let nextStables = game.stables
       .map((s) => {
         const appearedTogether = allSegments.some((ids) => s.memberIds.filter((id) => ids.includes(id)).length >= 2);
         if (appearedTogether) { stableRepBonus += Math.round(s.cohesion / 50); return { ...s, cohesion: clamp(s.cohesion + 4, 0, 100) }; }
@@ -1388,7 +1663,7 @@ export default function WrestlingGM() {
 
     const feudNews = [];
     let feudRepBonus = 0;
-    const nextFeuds = game.feuds.map((feud) => {
+    let nextFeuds = game.feuds.map((feud) => {
       if (feud.status === 'ended') return feud;
       if (!stillRoster.some((r) => r.id === feud.aId) || !stillRoster.some((r) => r.id === feud.bId)) return { ...feud, status: 'ended' };
       let updated = feud;
@@ -1415,6 +1690,7 @@ export default function WrestlingGM() {
     });
 
     const titleNews = [];
+    const changedTitleIds = new Set();
     const nextTitles = game.titles.map((title) => {
       const titleMatch = result.matchResults.find((m) => m.titleId === title.id);
       if (!titleMatch) return title;
@@ -1422,12 +1698,56 @@ export default function WrestlingGM() {
       const winnerNames = winnerIds.map((id) => (game.roster.find((r) => r.id === id) || {}).name || '???');
       const { title: nextTitle, changed } = resolveTitleMatch(title, winnerIds, winnerNames, titleMatch.finishId, game.company.week, game.company.year);
       if (changed) {
+        changedTitleIds.add(title.id);
         titleNews.push(title.holderIds.length ? `${winnerNames.join(' & ')} defeated the champion to win the ${title.name}!` : `${winnerNames.join(' & ')} won the vacant ${title.name}!`);
       } else if (titleMatch.finishId === 'dq' || titleMatch.finishId === 'countout') {
         titleNews.push(`The ${title.name} does not change hands on a ${FINISH_TYPES.find((f) => f.id === titleMatch.finishId).label.toLowerCase()}.`);
       }
       return nextTitle;
     });
+
+    const ambitionNews = [];
+    const ambitionCtx = { matchResults: result.matchResults, venue: result.venue, cardOrder: draftShow.card, nextTitles, nextTagTeams, nextStables };
+    const departingIds = new Set();
+    let rosterAfterAmbitions = stillRoster.map((w) => {
+      const amb = w.ambition || assignWrestlerAmbition();
+      const fulfilled = checkWrestlerAmbitionFulfilled(w, amb, ambitionCtx);
+      const { ambition: nextAmb, news } = tickAmbition(w, amb, fulfilled, WRESTLER_AMBITIONS, stillRoster);
+      if (news) ambitionNews.push(news);
+      if (nextAmb.satisfaction <= 0) {
+        departingIds.add(w.id);
+        const rival = game.rivals.length ? pick(game.rivals) : null;
+        ambitionNews.push(rival ? `${w.name} has left ${game.company.name} to sign with ${rival.name}, citing unmet ambitions.` : `${w.name} has walked out on ${game.company.name}, citing unmet ambitions.`);
+      }
+      return { ...w, ambition: nextAmb };
+    });
+    let nextRivalsWithSignings = nextRivals;
+    if (departingIds.size) {
+      rosterAfterAmbitions = rosterAfterAmbitions.filter((w) => !departingIds.has(w.id));
+      nextRivalsWithSignings = nextRivals.map((r) => (Math.random() < 0.4 ? { ...r, reputation: clamp(r.reputation + 2, 0, 100) } : r));
+    }
+    stillRoster = rosterAfterAmbitions;
+
+    const staffAmbitionNews = [];
+    function tickStaffGroup(list) {
+      return list.map((s) => {
+        const amb = s.ambition || assignStaffAmbition();
+        const fulfilled = checkStaffAmbitionFulfilled(s, amb, ambitionCtx);
+        const { ambition: nextAmb, news } = tickAmbition(s, amb, fulfilled, STAFF_AMBITIONS, null);
+        if (news) staffAmbitionNews.push(news);
+        return { ...s, ambition: nextAmb, weeksEmployed: s.weeksEmployed + 1 };
+      });
+    }
+    const nextStaff = { announcers: tickStaffGroup(game.staff.announcers), commentators: tickStaffGroup(game.staff.commentators) };
+
+    if (departingIds.size) {
+      nextTagTeams = nextTagTeams.filter((t) => t.memberIds.every((id) => !departingIds.has(id)));
+      nextStables = nextStables
+        .map((s) => ({ ...s, memberIds: s.memberIds.filter((id) => !departingIds.has(id)) }))
+        .filter((s) => s.memberIds.length >= 2)
+        .map((s) => (s.memberIds.includes(s.leaderId) ? s : { ...s, leaderId: s.memberIds[0] }));
+      nextFeuds = nextFeuds.map((f) => (departingIds.has(f.aId) || departingIds.has(f.bId) ? { ...f, status: 'ended' } : f));
+    }
 
     const newsEntries = [];
     newsEntries.push(`Week ${game.company.week}: the ${result.venue.name} show drew ${result.attendance.toLocaleString()} fans, averaging ${result.avgStars.toFixed(1)}★.`);
@@ -1441,6 +1761,8 @@ export default function WrestlingGM() {
     retirementNews.forEach((n) => newsEntries.push(n));
     tvNews.forEach((n) => newsEntries.push(n));
     rivalNews.forEach((n) => newsEntries.push(n));
+    ambitionNews.forEach((n) => newsEntries.push(n));
+    staffAmbitionNews.forEach((n) => newsEntries.push(n));
     newsEntries.push(result.netProfit >= 0 ? `The show turned a profit of ${money(result.netProfit)}.` : `The show lost ${money(Math.abs(result.netProfit))}.`);
 
     const historyEntry = {
@@ -1452,9 +1774,32 @@ export default function WrestlingGM() {
         stars: m.result.finalStars,
         winner: m.winnerIds.map((id) => (game.roster.find((r) => r.id === id) || {}).name || '???').join(' & '),
         titleName: m.titleId ? (game.titles.find((t) => t.id === m.titleId) || {}).name : null,
+        titleChanged: m.titleId ? changedTitleIds.has(m.titleId) : false,
         blowOff: !!(m.feudBlowOffId && game.feuds.find((f) => f.id === m.feudBlowOffId)),
       })),
     };
+
+    let matchResearch = game.company.matchResearch;
+    if (matchResearch.inProgress) {
+      const weeksRemaining = matchResearch.inProgress.weeksRemaining - 1;
+      if (weeksRemaining <= 0) {
+        const def = RESEARCHABLE_MATCH_TYPES.find((t) => t.id === matchResearch.inProgress.typeId);
+        matchResearch = { unlockedTypes: [...matchResearch.unlockedTypes, matchResearch.inProgress.typeId], inProgress: null };
+        newsEntries.push(`R&D complete — the ${def ? def.label : 'new match type'} is ready to book!`);
+      } else {
+        matchResearch = { ...matchResearch, inProgress: { ...matchResearch.inProgress, weeksRemaining } };
+      }
+    }
+
+    let nextMediaRecaps = game.mediaRecaps;
+    if (game.company.week % 4 === 0) {
+      const sliceStart = game.company.week - 3;
+      const recapSlice = [historyEntry, ...game.history].filter((h) => h.year === game.company.year && h.week >= sliceStart && h.week <= game.company.week);
+      const monthNum = Math.ceil(game.company.week / 4);
+      const recap = generateMonthlyRecap(recapSlice, stillRoster, monthNum, game.company.year);
+      nextMediaRecaps = [recap, ...game.mediaRecaps].slice(0, 24);
+      newsEntries.push(`Wrestling media has published its Month ${monthNum} recap.`);
+    }
 
     const nextGame = {
       ...game,
@@ -1464,14 +1809,17 @@ export default function WrestlingGM() {
         reputation: clamp(game.company.reputation + result.repDelta + stableRepBonus + feudRepBonus, 0, 100),
         week: nextWeek, year: nextYear,
         tvDeal,
+        matchResearch,
       },
       roster: stillRoster,
       freeAgents,
+      staff: nextStaff,
       titles: nextTitles,
       tagTeams: nextTagTeams,
       stables: nextStables,
       feuds: nextFeuds,
-      rivals: nextRivals,
+      rivals: nextRivalsWithSignings,
+      mediaRecaps: nextMediaRecaps,
       history: [historyEntry, ...game.history].slice(0, 60),
       news: [...newsEntries.reverse(), ...game.news].slice(0, 30),
       draftShow: makeEmptyDraft(),
@@ -1493,55 +1841,159 @@ export default function WrestlingGM() {
   }
 
   if (needsSetup || !game) {
+    const livePreviewTheme = setupThemeMode === 'custom'
+      ? { gold: setupCustomGold, goldSoft: shadeHex(setupCustomGold, 45), rope: setupCustomRope, ropeDark: shadeHex(setupCustomRope, -25) }
+      : (THEME_PRESETS.find((t) => t.id === setupThemePresetId) || THEME_PRESETS[0]);
+    const modeReady = (setupMode === 'preset' && setupPresetId) || (setupMode === 'custom' && setupRegion && setupStyle);
+
+    function pickPreset(preset) {
+      setSetupMode('preset'); setSetupPresetId(preset.id);
+      setSetupRegion(preset.region); setSetupStyle(preset.style);
+      setSetupName(preset.name);
+      if (preset.fundsTierId) setSetupFundsTierId(preset.fundsTierId);
+    }
+
     return (
       <div className="wgm-root min-h-screen p-6" style={{ backgroundColor: C.ink }}>
         <style>{FONT_STYLE}</style>
+        <style>{themeCssVars(livePreviewTheme)}</style>
         <div className="w-full max-w-sm mx-auto text-center pb-10">
           <Trophy size={36} color={C.gold} className="mx-auto mb-2" />
           <h1 className="wgm-display text-4xl mb-1" style={{ color: C.cream }}>BOOKED</h1>
           <p className="text-sm mb-6" style={{ color: 'rgba(246,240,225,0.6)' }}>Build a wrestling promotion from a folding-chair territory into a global powerhouse.</p>
 
           <div className="flex items-center gap-2 mb-2">
-            <Globe size={14} color={C.gold} />
-            <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>1. CHOOSE YOUR REGION</p>
+            <Building2 size={14} color={C.gold} />
+            <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>1. START FROM SCRATCH OR PICK A PRESET</p>
           </div>
+          <button onClick={() => { setSetupMode('custom'); setSetupPresetId(''); }} className="w-full rounded-lg p-3 text-left mb-2" style={{ backgroundColor: setupMode === 'custom' ? C.gold : C.inkSoft, border: `1px solid ${setupMode === 'custom' ? C.gold : C.inkFaint}` }}>
+            <p className="text-sm font-bold" style={{ color: setupMode === 'custom' ? C.ink : C.cream }}>Start From Scratch</p>
+            <p className="text-[11px]" style={{ color: setupMode === 'custom' ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>Pick your own region and style.</p>
+          </button>
           <div className="grid grid-cols-2 gap-2 mb-6">
-            {REGION_LIST.map((r) => (
-              <button key={r.id} onClick={() => setSetupRegion(r.id)} className="rounded-lg p-2.5 text-left" style={{ backgroundColor: setupRegion === r.id ? C.gold : C.inkSoft, border: `1px solid ${setupRegion === r.id ? C.gold : C.inkFaint}` }}>
-                <p className="text-xs font-bold" style={{ color: setupRegion === r.id ? C.ink : C.cream }}>{r.label}</p>
-                <p className="text-[10px] mt-0.5" style={{ color: setupRegion === r.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{r.blurb}</p>
-              </button>
-            ))}
+            {PRESET_COMPANIES.map((p) => {
+              const active = setupMode === 'preset' && setupPresetId === p.id;
+              const regionLabel = (REGION_LIST.find((r) => r.id === p.region) || {}).label;
+              const styleLabel = (STYLE_CONFIG[p.style] || {}).label;
+              return (
+                <button key={p.id} onClick={() => pickPreset(p)} className="rounded-lg p-2.5 text-left" style={{ backgroundColor: active ? C.gold : C.inkSoft, border: `1px solid ${active ? C.gold : C.inkFaint}` }}>
+                  <p className="text-xs font-bold" style={{ color: active ? C.ink : C.cream }}>{p.name}</p>
+                  <p className="text-[9px] mt-0.5" style={{ color: active ? C.inkSoft : 'rgba(246,240,225,0.5)' }}>{regionLabel} · {styleLabel}</p>
+                  <p className="text-[9px] mt-1" style={{ color: active ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{p.blurb}</p>
+                </button>
+              );
+            })}
           </div>
 
-          {setupRegion && (
+          {setupMode === 'custom' && (
             <div className="wgm-pop">
               <div className="flex items-center gap-2 mb-2">
-                <Flame size={14} color={C.gold} />
-                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>2. CHOOSE YOUR STYLE</p>
+                <Globe size={14} color={C.gold} />
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>REGION</p>
               </div>
-              <div className="space-y-2 mb-6">
-                {STYLE_LIST.map((s) => (
-                  <button key={s.id} onClick={() => setSetupStyle(s.id)} className="w-full rounded-lg p-3 text-left" style={{ backgroundColor: setupStyle === s.id ? C.gold : C.inkSoft, border: `1px solid ${setupStyle === s.id ? C.gold : C.inkFaint}` }}>
-                    <p className="text-sm font-bold" style={{ color: setupStyle === s.id ? C.ink : C.cream }}>{s.label}</p>
-                    <p className="text-[11px] mt-0.5" style={{ color: setupStyle === s.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{s.blurb}</p>
+              <div className="grid grid-cols-2 gap-2 mb-6">
+                {REGION_LIST.map((r) => (
+                  <button key={r.id} onClick={() => setSetupRegion(r.id)} className="rounded-lg p-2.5 text-left" style={{ backgroundColor: setupRegion === r.id ? C.gold : C.inkSoft, border: `1px solid ${setupRegion === r.id ? C.gold : C.inkFaint}` }}>
+                    <p className="text-xs font-bold" style={{ color: setupRegion === r.id ? C.ink : C.cream }}>{r.label}</p>
+                    <p className="text-[10px] mt-0.5" style={{ color: setupRegion === r.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{r.blurb}</p>
                   </button>
                 ))}
               </div>
+
+              {setupRegion && (
+                <div className="wgm-pop">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Flame size={14} color={C.gold} />
+                    <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>STYLE</p>
+                  </div>
+                  <div className="space-y-2 mb-6">
+                    {STYLE_LIST.map((s) => (
+                      <button key={s.id} onClick={() => setSetupStyle(s.id)} className="w-full rounded-lg p-3 text-left" style={{ backgroundColor: setupStyle === s.id ? C.gold : C.inkSoft, border: `1px solid ${setupStyle === s.id ? C.gold : C.inkFaint}` }}>
+                        <p className="text-sm font-bold" style={{ color: setupStyle === s.id ? C.ink : C.cream }}>{s.label}</p>
+                        <p className="text-[11px] mt-0.5" style={{ color: setupStyle === s.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{s.blurb}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {setupRegion && setupStyle && (
+          {modeReady && (
             <div className="wgm-pop">
-              <p className="wgm-mono text-[11px] tracking-widest mb-2" style={{ color: C.goldSoft }}>3. NAME YOUR PROMOTION</p>
+              <p className="wgm-mono text-[11px] tracking-widest mb-2" style={{ color: C.goldSoft }}>2. NAME YOUR PROMOTION</p>
               <input
                 value={setupName}
                 onChange={(e) => setSetupName(e.target.value)}
                 placeholder="Name your promotion"
-                className="w-full rounded-md px-4 py-3 mb-3 text-sm outline-none"
+                className="w-full rounded-md px-4 py-3 mb-6 text-sm outline-none"
                 style={{ backgroundColor: C.inkSoft, color: C.cream, border: `1px solid ${C.inkFaint}` }}
               />
-              <PrimaryButton full onClick={startNewGame}>Open For Business</PrimaryButton>
+
+              <div className="flex items-center gap-2 mb-2">
+                <Users size={14} color={C.gold} />
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>3. WORLD SIZE</p>
+              </div>
+              <p className="text-[11px] mb-2" style={{ color: 'rgba(246,240,225,0.55)' }}>Rival promotions competing with you</p>
+              <div className="grid grid-cols-4 gap-2 mb-4">
+                {RIVAL_COUNT_OPTIONS.map((n) => (
+                  <button key={n} onClick={() => setSetupRivalCount(n)} className="rounded-lg py-2 text-sm font-bold" style={{ backgroundColor: setupRivalCount === n ? C.gold : C.inkSoft, color: setupRivalCount === n ? C.ink : C.cream }}>{n}</button>
+                ))}
+              </div>
+
+              <p className="text-[11px] mb-2" style={{ color: 'rgba(246,240,225,0.55)' }}>Starting funds</p>
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                {FUNDS_TIERS.map((f) => (
+                  <button key={f.id} onClick={() => setSetupFundsTierId(f.id)} className="rounded-lg p-2 text-left" style={{ backgroundColor: setupFundsTierId === f.id ? C.gold : C.inkSoft, border: `1px solid ${setupFundsTierId === f.id ? C.gold : C.inkFaint}` }}>
+                    <p className="text-xs font-bold" style={{ color: setupFundsTierId === f.id ? C.ink : C.cream }}>{f.label}</p>
+                    <p className="wgm-mono text-[9px]" style={{ color: setupFundsTierId === f.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{money(f.funds)}</p>
+                  </button>
+                ))}
+              </div>
+
+              <p className="text-[11px] mb-2" style={{ color: 'rgba(246,240,225,0.55)' }}>Difficulty</p>
+              <div className="grid grid-cols-3 gap-2 mb-6">
+                {Object.values(DIFFICULTY_CONFIG).map((d) => (
+                  <button key={d.id} onClick={() => setSetupDifficultyId(d.id)} className="rounded-lg p-2 text-left" style={{ backgroundColor: setupDifficultyId === d.id ? C.gold : C.inkSoft, border: `1px solid ${setupDifficultyId === d.id ? C.gold : C.inkFaint}` }}>
+                    <p className="text-xs font-bold" style={{ color: setupDifficultyId === d.id ? C.ink : C.cream }}>{d.label}</p>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 mb-2">
+                <Palette size={14} color={C.gold} />
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>4. COMPANY COLORS</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                {THEME_PRESETS.map((t) => (
+                  <button key={t.id} onClick={() => { setSetupThemeMode('preset'); setSetupThemePresetId(t.id); }} className="rounded-lg p-2 flex flex-col items-center gap-1.5" style={{ backgroundColor: setupThemeMode === 'preset' && setupThemePresetId === t.id ? C.inkFaint : C.inkSoft, border: `1px solid ${setupThemeMode === 'preset' && setupThemePresetId === t.id ? t.gold : C.inkFaint}` }}>
+                    <div className="flex gap-1">
+                      <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.gold }} />
+                      <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.rope }} />
+                    </div>
+                    <span className="text-[9px]" style={{ color: C.cream }}>{t.name}</span>
+                  </button>
+                ))}
+                <button onClick={() => setSetupThemeMode('custom')} className="rounded-lg p-2 flex flex-col items-center gap-1.5 justify-center" style={{ backgroundColor: setupThemeMode === 'custom' ? C.inkFaint : C.inkSoft, border: `1px solid ${setupThemeMode === 'custom' ? setupCustomGold : C.inkFaint}` }}>
+                  <Wrench size={16} color={C.cream} />
+                  <span className="text-[9px]" style={{ color: C.cream }}>Custom</span>
+                </button>
+              </div>
+              {setupThemeMode === 'custom' && (
+                <div className="flex items-center justify-center gap-4 mb-6 wgm-pop">
+                  <label className="flex flex-col items-center gap-1">
+                    <span className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.6)' }}>PRIMARY</span>
+                    <input type="color" value={setupCustomGold} onChange={(e) => setSetupCustomGold(e.target.value)} className="w-10 h-10 rounded-full border-0 bg-transparent cursor-pointer" />
+                  </label>
+                  <label className="flex flex-col items-center gap-1">
+                    <span className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.6)' }}>ACCENT</span>
+                    <input type="color" value={setupCustomRope} onChange={(e) => setSetupCustomRope(e.target.value)} className="w-10 h-10 rounded-full border-0 bg-transparent cursor-pointer" />
+                  </label>
+                </div>
+              )}
+              {setupThemeMode !== 'custom' && <div className="mb-3" />}
+
+              <PrimaryButton full onClick={startNewGame} disabled={!setupName.trim()}>Open For Business</PrimaryButton>
             </div>
           )}
         </div>
@@ -1550,7 +2002,7 @@ export default function WrestlingGM() {
   }
 
   const { company, roster, freeAgents, staff, staffPool, titles, tagTeams, stables, feuds, rivals, history, news, draftShow } = game;
-  const healthyRoster = roster.filter((w) => !w.injury);
+  const healthyRoster = roster.filter((w) => !w.injury && !(w.ambition && w.ambition.status === 'holdout'));
   const estimate = estimateShow(draftShow, game);
   const draftVenue = VENUE_TIERS.find((v) => v.id === draftShow.venueId);
   const unlocked = VENUE_TIERS.filter((v) => v.minRep <= company.reputation);
@@ -1568,6 +2020,7 @@ export default function WrestlingGM() {
   return (
     <div className="wgm-root min-h-screen pb-20" style={{ backgroundColor: C.canvas }}>
       <style>{FONT_STYLE}</style>
+      <style>{themeCssVars(company.theme)}</style>
 
       {/* Header */}
       <div className="sticky top-0 z-30 px-4 pt-4 pb-3" style={{ backgroundColor: C.ink }}>
@@ -1601,6 +2054,7 @@ export default function WrestlingGM() {
             onOpenUpgrades={() => setUpgradesModalOpen(true)}
             onOpenTv={() => setTvModalOpen(true)}
             onOpenRivals={() => setRivalsModalOpen(true)}
+            onOpenMedia={() => setMediaModalOpen(true)}
           />
         )}
         {tab === 'roster' && (
@@ -1617,7 +2071,7 @@ export default function WrestlingGM() {
           <TitlesTab titles={titles} company={company} onOpenBuilder={() => setTitleBuilderOpen(true)} onSelectTitle={setSelectedTitle} funds={company.funds} />
         )}
         {tab === 'staff' && (
-          <StaffTab staff={staff} staffPool={staffPool} funds={company.funds} onHire={hireStaff} onFire={(role, id) => setConfirmAction({ type: 'fireStaff', role, id })} />
+          <StaffTab staff={staff} staffPool={staffPool} funds={company.funds} onHire={hireStaff} onFire={(role, id) => setConfirmAction({ type: 'fireStaff', role, id })} onRaise={giveStaffRaise} />
         )}
         {tab === 'book' && (
           <BookShowTab
@@ -1654,16 +2108,16 @@ export default function WrestlingGM() {
       {/* Wrestler modal */}
       {selectedWrestler && (
         <WrestlerModal
-          wrestler={selectedWrestler} titles={titles} tagTeams={tagTeams} stables={stables} onClose={() => setSelectedWrestler(null)}
+          wrestler={roster.find((r) => r.id === selectedWrestler.id) || selectedWrestler} titles={titles} tagTeams={tagTeams} stables={stables} onClose={() => setSelectedWrestler(null)}
           onAlign={setAlignment} onRelease={(id) => setConfirmAction({ type: 'release', id })}
-          onRenew={renewContract} funds={company.funds}
+          onRenew={renewContract} onGrantRequest={grantAmbitionRequest} funds={company.funds}
         />
       )}
 
       {/* Match builder */}
       {matchBuilderOpen && (
         <MatchBuilderModal
-          roster={healthyRoster} titles={titles} tagTeams={tagTeams} feuds={feuds} style={company.style} onClose={() => setMatchBuilderOpen(false)}
+          roster={healthyRoster} titles={titles} tagTeams={tagTeams} feuds={feuds} style={company.style} unlockedResearch={company.matchResearch.unlockedTypes} onClose={() => setMatchBuilderOpen(false)}
           onAdd={(item) => { addCardItem(item); setMatchBuilderOpen(false); }}
         />
       )}
@@ -1717,7 +2171,7 @@ export default function WrestlingGM() {
           onPurchaseRingShape={purchaseRingShape} onEquipRingShape={equipRingShape}
           onAddConcession={addConcessionItem} onSetConcessionPrice={setConcessionPrice} onRemoveConcession={removeConcessionItem}
           onAddMerch={addMerchItem} onSetMerchPrice={setMerchPrice} onSetMerchWrestler={setMerchWrestler} onRemoveMerch={removeMerchItem}
-          onPurchaseWeaponItem={purchaseWeaponItem}
+          onPurchaseWeaponItem={purchaseWeaponItem} onStartResearch={startMatchResearch}
         />
       )}
 
@@ -1729,6 +2183,11 @@ export default function WrestlingGM() {
       {/* Rival promotions */}
       {rivalsModalOpen && (
         <RivalsModal rivals={rivals} company={company} onClose={() => setRivalsModalOpen(false)} onSetRelationship={setRivalRelationship} />
+      )}
+
+      {/* Wrestling media */}
+      {mediaModalOpen && (
+        <MediaModal recaps={game.mediaRecaps} companyName={company.name} onClose={() => setMediaModalOpen(false)} />
       )}
 
       {/* Promo builder */}
@@ -1769,7 +2228,7 @@ export default function WrestlingGM() {
 /* ============================================================
    DASHBOARD TAB
    ============================================================ */
-function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, unlocked, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals }) {
+function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, unlocked, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals, onOpenMedia }) {
   const { company, roster } = game;
   const injured = roster.filter((w) => w.injury);
   const avgPop = Math.round(average(roster.map((w) => w.popularity)));
@@ -1862,6 +2321,16 @@ function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, unlocked, o
         </p>
       </button>
 
+      <button onClick={onOpenMedia} className="w-full rounded-xl p-4 text-left" style={{ backgroundColor: C.cream, border: `1px solid ${C.line}` }}>
+        <div className="flex items-center justify-between mb-1">
+          <SectionTitle icon={Newspaper}>Wrestling Media</SectionTitle>
+          <ChevronRight size={16} color={C.inkFaint} />
+        </div>
+        <p className="text-xs" style={{ color: C.inkFaint }}>
+          {game.mediaRecaps.length ? `${game.mediaRecaps.length} monthly recap${game.mediaRecaps.length !== 1 ? 's' : ''} published` : 'No recaps yet — check back after your first month of shows.'}
+        </p>
+      </button>
+
       <div>
         <SectionTitle icon={Megaphone}>Latest News</SectionTitle>
         <div className="space-y-2">
@@ -1896,7 +2365,7 @@ function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, unlocked, o
 
 function MiniStat({ icon: Icon, label, value, warn }) {
   return (
-    <div className="rounded-lg p-3 text-center" style={{ backgroundColor: warn ? 'rgba(172,58,44,0.1)' : C.cream, border: `1px solid ${warn ? C.rope : C.line}` }}>
+    <div className="rounded-lg p-3 text-center" style={{ backgroundColor: warn ? 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.1)' : C.cream, border: `1px solid ${warn ? C.rope : C.line}` }}>
       <Icon size={16} color={warn ? C.rope : C.gold} className="mx-auto mb-1" />
       <p className="wgm-display text-lg leading-none" style={{ color: C.ink }}>{value}</p>
       <p className="wgm-mono text-[9px] mt-1" style={{ color: C.inkFaint }}>{label.toUpperCase()}</p>
@@ -2026,6 +2495,7 @@ function RosterTab({ roster, freeAgents, titles, tagTeams, stables, feuds, subTa
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold" style={{ color: C.ink }}>{f.aName} <span style={{ color: C.rope }}>vs</span> {f.bName}</p>
+                    {f.hook && <p className="text-[10px] italic truncate" style={{ color: C.inkFaint }}>{f.hook}</p>}
                     <p className="text-[11px]" style={{ color: C.inkFaint }}>{f.matchCount} match{f.matchCount !== 1 ? 'es' : ''} so far</p>
                   </div>
                   <ChevronRight size={16} color={C.inkFaint} />
@@ -2067,7 +2537,7 @@ function TraitBadges({ traits, max = 2 }) {
       {traits.slice(0, max).map((id) => {
         const t = traitInfo(id);
         if (!t) return null;
-        return <span key={id} className="wgm-mono text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: t.polarity === 'positive' ? 'rgba(196,146,46,0.18)' : 'rgba(172,58,44,0.14)', color: t.polarity === 'positive' ? C.gold : C.rope }}>{t.label}</span>;
+        return <span key={id} className="wgm-mono text-[9px] px-1.5 py-0.5 rounded" style={{ backgroundColor: t.polarity === 'positive' ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.18)' : 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.14)', color: t.polarity === 'positive' ? C.gold : C.rope }}>{t.label}</span>;
       })}
     </div>
   );
@@ -2075,14 +2545,18 @@ function TraitBadges({ traits, max = 2 }) {
 
 function WrestlerRow({ w, titles, onClick }) {
   const champTitles = championTitlesFor(titles, w.id);
+  const ambStatus = w.ambition && w.ambition.status;
+  const borderColor = w.injury ? C.rope : ambStatus === 'holdout' ? C.rope : champTitles.length ? C.gold : C.line;
   return (
-    <button onClick={onClick} className="w-full rounded-lg p-3 flex items-center gap-3 text-left" style={{ backgroundColor: C.cream, border: `1px solid ${w.injury ? C.rope : champTitles.length ? C.gold : C.line}` }}>
+    <button onClick={onClick} className="w-full rounded-lg p-3 flex items-center gap-3 text-left" style={{ backgroundColor: C.cream, border: `1px solid ${borderColor}` }}>
       <TierBadge tier={w.tier} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <p className="text-sm font-semibold truncate" style={{ color: C.ink }}>{w.name}</p>
           <AlignmentBadge alignment={w.alignment} />
           {champTitles.length > 0 && <Crown size={12} color={C.gold} fill={C.gold} />}
+          {ambStatus === 'holdout' && <AlertTriangle size={12} color={C.rope} />}
+          {ambStatus === 'unhappy' && <AlertTriangle size={12} color={C.goldSoft} />}
         </div>
         <p className="text-[11px] truncate" style={{ color: C.inkFaint }}>"{w.gimmick}"</p>
         {champTitles.length > 0 && <p className="text-[10px] truncate" style={{ color: C.gold }}>{champTitles.map((t) => t.name).join(', ')}</p>}
@@ -2096,6 +2570,8 @@ function WrestlerRow({ w, titles, onClick }) {
           ) : (
             <span className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{w.contractWeeksLeft}W LEFT</span>
           )}
+          {ambStatus === 'holdout' && <span className="wgm-mono text-[9px] font-bold" style={{ color: C.rope }}>HOLDOUT</span>}
+          {ambStatus === 'unhappy' && <span className="wgm-mono text-[9px] font-bold" style={{ color: C.goldSoft }}>UNHAPPY</span>}
         </div>
         <TraitBadges traits={w.traits} />
       </div>
@@ -2108,10 +2584,11 @@ function EmptyState({ text }) {
   return <div className="rounded-lg p-6 text-center text-xs" style={{ backgroundColor: C.canvasAlt, color: C.inkFaint }}>{text}</div>;
 }
 
-function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, onRelease, onRenew, funds }) {
+function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, onRelease, onRenew, onGrantRequest, funds }) {
   const champTitles = championTitlesFor(titles, wrestler.id);
   const team = (tagTeams || []).find((t) => t.memberIds.includes(wrestler.id));
   const stable = (stables || []).find((s) => s.memberIds.includes(wrestler.id));
+  const amb = wrestler.ambition;
   return (
     <Modal title={wrestler.name} onClose={onClose}>
       <div className="flex items-center gap-2 mb-4">
@@ -2122,6 +2599,30 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, 
         </div>
       </div>
 
+      {amb && (
+        <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: amb.status === 'holdout' ? 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.1)' : amb.status === 'unhappy' ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.1)' : C.canvasAlt, border: `1px solid ${amb.status === 'holdout' ? C.rope : C.line}` }}>
+          <div className="flex items-center justify-between mb-1">
+            <p className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>AMBITION</p>
+            {amb.status === 'holdout' && <Pill bg={C.rope}>HOLDOUT</Pill>}
+            {amb.status === 'unhappy' && <Pill bg={C.gold} color={C.ink}>UNHAPPY</Pill>}
+          </div>
+          <p className="text-sm font-semibold mb-2" style={{ color: C.ink }}>
+            {amb.label}{amb.type === 'beat_rival' && amb.targetName ? ` (${amb.targetName})` : ''}
+          </p>
+          <div className="h-1.5 rounded-full overflow-hidden mb-2" style={{ backgroundColor: C.canvas }}>
+            <div className="h-full rounded-full" style={{ width: `${amb.satisfaction}%`, backgroundColor: amb.satisfaction < 20 ? C.rope : amb.satisfaction < 40 ? C.goldSoft : C.good }} />
+          </div>
+          <p className="wgm-mono text-[9px] mb-2" style={{ color: C.inkFaint }}>SATISFACTION {Math.round(amb.satisfaction)}/100</p>
+          {amb.pendingRequest && (
+            <div>
+              <p className="text-[11px] mb-2" style={{ color: C.inkFaint }}>{amb.pendingRequest.text}</p>
+              <GhostButton icon={Check} onClick={() => onGrantRequest(wrestler.id)} disabled={funds < 1500}>Grant Request ({money(1500)})</GhostButton>
+            </div>
+          )}
+          {amb.status === 'holdout' && !amb.pendingRequest && <p className="text-[11px]" style={{ color: C.rope }}>Refusing to be booked until things improve.</p>}
+        </div>
+      )}
+
       {(wrestler.traits && wrestler.traits.length > 0) && (
         <div className="mb-4">
           <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>PERSONALITY</p>
@@ -2130,7 +2631,7 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, 
               const t = traitInfo(id);
               if (!t) return null;
               return (
-                <div key={id} className="flex items-center gap-2 rounded-md p-2" style={{ backgroundColor: t.polarity === 'positive' ? 'rgba(196,146,46,0.1)' : 'rgba(172,58,44,0.08)' }}>
+                <div key={id} className="flex items-center gap-2 rounded-md p-2" style={{ backgroundColor: t.polarity === 'positive' ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.1)' : 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.08)' }}>
                   <span className="wgm-mono text-[10px] font-bold shrink-0" style={{ color: t.polarity === 'positive' ? C.gold : C.rope }}>{t.label}</span>
                   <span className="text-[11px]" style={{ color: C.inkFaint }}>{t.desc}</span>
                 </div>
@@ -2140,6 +2641,7 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, 
         </div>
       )}
 
+
       {(team || stable) && (
         <div className="flex flex-wrap gap-2 mb-4">
           {team && <Pill bg={C.gold} color={C.ink}>TEAM: {team.name} ({team.chemistry} chem)</Pill>}
@@ -2148,7 +2650,7 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, 
       )}
 
       {champTitles.length > 0 && (
-        <div className="rounded-lg p-2.5 mb-4 flex items-center gap-2" style={{ backgroundColor: 'rgba(196,146,46,0.14)' }}>
+        <div className="rounded-lg p-2.5 mb-4 flex items-center gap-2" style={{ backgroundColor: 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.14)' }}>
           <Crown size={14} color={C.gold} fill={C.gold} />
           <p className="text-xs font-semibold" style={{ color: C.gold }}>{champTitles.map((t) => t.name).join(' · ')}</p>
         </div>
@@ -2167,7 +2669,7 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, 
       </div>
 
       {wrestler.injury && (
-        <div className="rounded-lg p-2.5 mb-4 flex items-center gap-2" style={{ backgroundColor: 'rgba(172,58,44,0.1)' }}>
+        <div className="rounded-lg p-2.5 mb-4 flex items-center gap-2" style={{ backgroundColor: 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.1)' }}>
           <AlertTriangle size={14} color={C.rope} />
           <p className="text-xs" style={{ color: C.rope }}>{wrestler.injury.label} — {wrestler.injury.weeksLeft} week{wrestler.injury.weeksLeft > 1 ? 's' : ''} remaining</p>
         </div>
@@ -2198,31 +2700,50 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, onClose, onAlign, 
 /* ============================================================
    STAFF TAB
    ============================================================ */
-function StaffTab({ staff, staffPool, funds, onHire, onFire }) {
+function StaffTab({ staff, staffPool, funds, onHire, onFire, onRaise }) {
   return (
     <div className="space-y-6">
-      <StaffGroup title="Announcers" icon={Radio} role="Announcer" current={staff.announcers} pool={staffPool.announcers} funds={funds} onHire={onHire} onFire={onFire} />
-      <StaffGroup title="Commentators" icon={Mic} role="Commentator" current={staff.commentators} pool={staffPool.commentators} funds={funds} onHire={onHire} onFire={onFire} />
+      <StaffGroup title="Announcers" icon={Radio} role="Announcer" current={staff.announcers} pool={staffPool.announcers} funds={funds} onHire={onHire} onFire={onFire} onRaise={onRaise} />
+      <StaffGroup title="Commentators" icon={Mic} role="Commentator" current={staff.commentators} pool={staffPool.commentators} funds={funds} onHire={onHire} onFire={onFire} onRaise={onRaise} />
     </div>
   );
 }
 
-function StaffGroup({ title, icon, role, current, pool, funds, onHire, onFire }) {
+function StaffGroup({ title, icon, role, current, pool, funds, onHire, onFire, onRaise }) {
   return (
     <div>
       <SectionTitle icon={icon} sub={`${current.length}/3 hired`}>{title}</SectionTitle>
       <div className="space-y-2 mb-3">
         {current.length === 0 && <EmptyState text={`No ${title.toLowerCase()} hired — shows will feel flat.`} />}
-        {current.map((s) => (
-          <div key={s.id} className="rounded-lg p-3 flex items-center gap-3" style={{ backgroundColor: C.ink }}>
-            <div className="flex-1">
-              <p className="text-sm font-semibold" style={{ color: C.cream }}>{s.name}</p>
-              <p className="wgm-mono text-[10px]" style={{ color: C.goldSoft }}>QUALITY {s.quality} · {money(s.salary)}/wk</p>
-              {s.trait && <StaffTraitBadge id={s.trait} />}
+        {current.map((s) => {
+          const amb = s.ambition;
+          const raiseCost = Math.round(s.salary * 3);
+          return (
+            <div key={s.id} className="rounded-lg p-3" style={{ backgroundColor: C.ink }}>
+              <div className="flex items-center gap-3">
+                <div className="flex-1">
+                  <p className="text-sm font-semibold" style={{ color: C.cream }}>{s.name}</p>
+                  <p className="wgm-mono text-[10px]" style={{ color: C.goldSoft }}>QUALITY {s.quality} · {money(s.salary)}/wk</p>
+                  {s.trait && <StaffTraitBadge id={s.trait} />}
+                </div>
+                <GhostButton danger onClick={() => onFire(role, s.id)}>Fire</GhostButton>
+              </div>
+              {amb && (
+                <div className="mt-2 pt-2" style={{ borderTop: '1px solid rgba(246,240,225,0.12)' }}>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-[11px]" style={{ color: 'rgba(246,240,225,0.7)' }}>{amb.label}</p>
+                    {amb.status === 'holdout' && <Pill bg={C.rope}>HOLDOUT</Pill>}
+                    {amb.status === 'unhappy' && <Pill bg={C.gold} color={C.ink}>UNHAPPY</Pill>}
+                  </div>
+                  <div className="h-1 rounded-full overflow-hidden mb-2" style={{ backgroundColor: 'rgba(246,240,225,0.15)' }}>
+                    <div className="h-full rounded-full" style={{ width: `${amb.satisfaction}%`, backgroundColor: amb.satisfaction < 20 ? C.rope : amb.satisfaction < 40 ? C.goldSoft : C.good }} />
+                  </div>
+                  <GhostButton onClick={() => onRaise(role, s.id)} disabled={funds < raiseCost}>Give Raise ({money(raiseCost)})</GhostButton>
+                </div>
+              )}
             </div>
-            <GhostButton danger onClick={() => onFire(role, s.id)}>Fire</GhostButton>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>AVAILABLE</p>
       <div className="space-y-2">
@@ -2244,7 +2765,7 @@ function StaffGroup({ title, icon, role, current, pool, funds, onHire, onFire })
 function StaffTraitBadge({ id }) {
   const t = STAFF_TRAITS.find((x) => x.id === id);
   if (!t) return null;
-  return <span className="wgm-mono text-[9px] px-1.5 py-0.5 rounded inline-block mt-1" style={{ backgroundColor: t.polarity === 'positive' ? 'rgba(196,146,46,0.18)' : 'rgba(172,58,44,0.14)', color: t.polarity === 'positive' ? C.gold : C.rope }}>{t.label}</span>;
+  return <span className="wgm-mono text-[9px] px-1.5 py-0.5 rounded inline-block mt-1" style={{ backgroundColor: t.polarity === 'positive' ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.18)' : 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.14)', color: t.polarity === 'positive' ? C.gold : C.rope }}>{t.label}</span>;
 }
 
 /* ============================================================
@@ -2293,7 +2814,7 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
                   {item.kind === 'match' ? (
                     <>
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <Pill bg={C.gold} color={C.ink}>{MATCH_TYPES.find((m) => m.id === item.typeId).label}</Pill>
+                        <Pill bg={C.gold} color={C.ink}>{(ALL_MATCH_TYPES.find((m) => m.id === item.typeId) || {}).label}</Pill>
                         {item.titleId && <Pill bg={C.rope}>{(titles.find((t) => t.id === item.titleId) || {}).name || 'TITLE'}</Pill>}
                         {item.feudBlowOffId && <Pill bg={C.rope}>BLOW-OFF: {(feuds.find((f) => f.id === item.feudBlowOffId) || {}).aName || 'FEUD'}</Pill>}
                       </div>
@@ -2330,24 +2851,46 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
 /* ============================================================
    MATCH BUILDER MODAL
    ============================================================ */
-function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, onClose, onAdd }) {
+function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedResearch, onClose, onAdd }) {
+  const availableTypes = [...MATCH_TYPES, ...RESEARCHABLE_MATCH_TYPES.filter((t) => (unlockedResearch || []).includes(t.id))];
   const styleTypes = style && STYLE_CONFIG[style]
-    ? [...MATCH_TYPES].sort((a, b) => {
+    ? [...availableTypes].sort((a, b) => {
         const pref = STYLE_CONFIG[style].preferredTypes;
         const ia = pref.indexOf(a.id); const ib = pref.indexOf(b.id);
         return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
       })
-    : MATCH_TYPES;
+    : availableTypes;
   const [typeId, setTypeId] = useState(styleTypes[0].id);
   const [selected, setSelected] = useState([]);
   const [winnerIds, setWinnerIds] = useState([]);
+  const [sideMap, setSideMap] = useState({});
   const [finishId, setFinishId] = useState('clean');
   const [titleId, setTitleId] = useState('');
   const [feudBlowOffId, setFeudBlowOffId] = useState('');
-  const type = MATCH_TYPES.find((m) => m.id === typeId);
-  const selectedTitle = titles.find((t) => t.id === titleId);
-  const winnersNeeded = selectedTitle && selectedTitle.isTag ? 2 : 1;
+  const type = availableTypes.find((m) => m.id === typeId) || availableTypes[0];
+  const isSidesMatch = !!type.sides;
+  const sideSize = type.sideSize || 2;
   const eligibleFeuds = (feuds || []).filter((f) => f.status !== 'ended' && feudPairPresent(f, selected));
+
+  useEffect(() => {
+    if (!isSidesMatch || selected.length !== sideSize * 2) { setSideMap({}); return; }
+    setSideMap((prev) => {
+      const stillValid = selected.every((id) => prev[id]) && Object.values(prev).filter((v) => v === 'A').length === sideSize;
+      if (stillValid) return prev;
+      const registeredTeam = (tagTeams || []).find((t) => t.memberIds.every((id) => selected.includes(id)));
+      const aIds = registeredTeam ? [...registeredTeam.memberIds, ...selected.filter((id) => !registeredTeam.memberIds.includes(id))].slice(0, sideSize) : selected.slice(0, sideSize);
+      const next = {};
+      selected.forEach((id) => { next[id] = aIds.includes(id) ? 'A' : 'B'; });
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSidesMatch, sideSize, selected.join(','), tagTeams]);
+
+  const sideAIds = selected.filter((id) => sideMap[id] === 'A');
+  const sideBIds = selected.filter((id) => sideMap[id] === 'B');
+  const sidesBalanced = isSidesMatch && sideAIds.length === sideSize && sideBIds.length === sideSize;
+  const titleChoices = titles.filter((t) => (isSidesMatch ? t.isTag : !t.isTag));
+  const selectedTitle = titleChoices.find((t) => t.id === titleId);
 
   function toggle(id) {
     setSelected((prev) => {
@@ -2357,14 +2900,26 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, onClose, on
     });
   }
   function toggleWinner(id) {
-    setWinnerIds((prev) => {
-      if (prev.includes(id)) return prev.filter((p) => p !== id);
-      if (prev.length >= winnersNeeded) return winnersNeeded === 1 ? [id] : prev;
-      return [...prev, id];
+    setWinnerIds((prev) => (prev.includes(id) ? [] : [id]));
+  }
+  function flipSide(id) {
+    setSideMap((prev) => {
+      const target = prev[id] === 'A' ? 'B' : 'A';
+      const targetIds = selected.filter((sid) => prev[sid] === target && sid !== id);
+      const swapPartner = targetIds[0];
+      const next = { ...prev, [id]: target };
+      if (swapPartner) next[swapPartner] = prev[id];
+      return next;
     });
+    setWinnerIds([]);
+  }
+  function pickWinningSide(sideLetter) {
+    setWinnerIds(sideLetter === 'A' ? sideAIds : sideBIds);
   }
 
-  const canAdd = selected.length >= type.minP && selected.length <= type.maxP && winnerIds.length === winnersNeeded;
+  const canAdd = isSidesMatch
+    ? selected.length === sideSize * 2 && sidesBalanced && winnerIds.length === sideSize
+    : selected.length >= type.minP && selected.length <= type.maxP && winnerIds.length === 1;
   const activeFeudBlowOffId = eligibleFeuds.some((f) => f.id === feudBlowOffId) ? feudBlowOffId : '';
 
   return (
@@ -2372,7 +2927,7 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, onClose, on
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>MATCH TYPE</p>
       <div className="grid grid-cols-2 gap-2 mb-4">
         {styleTypes.map((m) => (
-          <button key={m.id} onClick={() => { setTypeId(m.id); setSelected([]); setWinnerIds([]); }} className="rounded-md p-2 text-xs font-semibold text-left" style={{ backgroundColor: typeId === m.id ? C.ink : C.canvasAlt, color: typeId === m.id ? C.gold : C.inkFaint }}>
+          <button key={m.id} onClick={() => { setTypeId(m.id); setSelected([]); setWinnerIds([]); setTitleId(''); }} className="rounded-md p-2 text-xs font-semibold text-left" style={{ backgroundColor: typeId === m.id ? C.ink : C.canvasAlt, color: typeId === m.id ? C.gold : C.inkFaint }}>
             {m.label}<br /><span className="wgm-mono text-[9px] opacity-70">{m.minP === m.maxP ? `${m.minP} wrestlers` : `${m.minP}–${m.maxP} wrestlers`}</span>
           </button>
         ))}
@@ -2387,34 +2942,55 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, onClose, on
               <input type="checkbox" checked={selected.includes(w.id)} onChange={() => toggle(w.id)} />
               <span className="flex-1" style={{ color: C.ink }}>{w.name} <span style={{ color: C.inkFaint }}>({w.tier})</span></span>
               {team && <Pill bg={C.gold} color={C.ink}>{team.name}</Pill>}
+              {isSidesMatch && selected.includes(w.id) && (
+                <button type="button" onClick={() => flipSide(w.id)} className="wgm-mono text-[9px] px-2 py-1 rounded-full font-bold" style={{ backgroundColor: sideMap[w.id] === 'A' ? C.gold : C.rope, color: sideMap[w.id] === 'A' ? C.ink : C.cream }}>
+                  SIDE {sideMap[w.id] || '?'}
+                </button>
+              )}
               <AlignmentBadge alignment={w.alignment} />
             </label>
           );
         })}
       </div>
 
-      {titles.length > 0 && (
+      {titleChoices.length > 0 && (
         <>
           <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>TITLE ON THE LINE</p>
           <div className="flex flex-wrap gap-2 mb-4">
             <button onClick={() => { setTitleId(''); setWinnerIds([]); }} className="px-3 py-1.5 rounded-full text-xs font-semibold" style={{ backgroundColor: titleId === '' ? C.ink : C.canvasAlt, color: titleId === '' ? C.gold : C.inkFaint }}>No Title</button>
-            {titles.map((t) => (
+            {titleChoices.map((t) => (
               <button key={t.id} onClick={() => { setTitleId(t.id); setWinnerIds([]); }} className="px-3 py-1.5 rounded-full text-xs font-semibold" style={{ backgroundColor: titleId === t.id ? C.gold : C.canvasAlt, color: titleId === t.id ? C.ink : C.inkFaint }}>{t.name}{t.isTag ? ' (Tag)' : ''}</button>
             ))}
           </div>
         </>
       )}
 
-      {selected.length >= type.minP && (
-        <>
-          <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>{winnersNeeded === 2 ? 'WINNING TEAM (PICK 2)' : 'WINNER'}</p>
-          <div className="flex flex-wrap gap-2 mb-4">
-            {selected.map((id) => {
-              const w = roster.find((r) => r.id === id);
-              return <button key={id} onClick={() => toggleWinner(id)} className="px-3 py-1.5 rounded-full text-xs font-semibold" style={{ backgroundColor: winnerIds.includes(id) ? C.gold : C.canvasAlt, color: winnerIds.includes(id) ? C.ink : C.inkFaint }}>{w.name}</button>;
-            })}
-          </div>
-        </>
+      {isSidesMatch ? (
+        sidesBalanced && (
+          <>
+            <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>WINNING SIDE</p>
+            <div className="flex flex-col gap-2 mb-4">
+              <button onClick={() => pickWinningSide('A')} className="px-3 py-2 rounded-md text-xs font-semibold text-left" style={{ backgroundColor: winnerIds.length && sideAIds.every((id) => winnerIds.includes(id)) ? C.gold : C.canvasAlt, color: winnerIds.length && sideAIds.every((id) => winnerIds.includes(id)) ? C.ink : C.inkFaint }}>
+                Side A: {sideAIds.map((id) => (roster.find((r) => r.id === id) || {}).name).join(' & ')}
+              </button>
+              <button onClick={() => pickWinningSide('B')} className="px-3 py-2 rounded-md text-xs font-semibold text-left" style={{ backgroundColor: winnerIds.length && sideBIds.every((id) => winnerIds.includes(id)) ? C.rope : C.canvasAlt, color: winnerIds.length && sideBIds.every((id) => winnerIds.includes(id)) ? C.cream : C.inkFaint }}>
+                Side B: {sideBIds.map((id) => (roster.find((r) => r.id === id) || {}).name).join(' & ')}
+              </button>
+            </div>
+          </>
+        )
+      ) : (
+        selected.length >= type.minP && (
+          <>
+            <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>WINNER</p>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {selected.map((id) => {
+                const w = roster.find((r) => r.id === id);
+                return <button key={id} onClick={() => toggleWinner(id)} className="px-3 py-1.5 rounded-full text-xs font-semibold" style={{ backgroundColor: winnerIds.includes(id) ? C.gold : C.canvasAlt, color: winnerIds.includes(id) ? C.ink : C.inkFaint }}>{w.name}</button>;
+              })}
+            </div>
+          </>
+        )
       )}
 
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>FINISH</p>
@@ -2444,7 +3020,7 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, onClose, on
         </>
       )}
 
-      <PrimaryButton full disabled={!canAdd} onClick={() => onAdd({ kind: 'match', id: uid(), typeId, participantIds: selected, winnerIds, finishId, titleId: titleId || null, feudBlowOffId: activeFeudBlowOffId || null })}>Add to Card</PrimaryButton>
+      <PrimaryButton full disabled={!canAdd} onClick={() => onAdd({ kind: 'match', id: uid(), typeId, participantIds: selected, winnerIds, finishId, titleId: titleId || null, feudBlowOffId: activeFeudBlowOffId || null, sides: isSidesMatch ? [sideAIds, sideBIds] : null })}>Add to Card</PrimaryButton>
     </Modal>
   );
 }
@@ -2471,13 +3047,17 @@ function PromoBuilderModal({ roster, onClose, onAdd }) {
 
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>PARTICIPANTS ({selected.length}/3)</p>
       <div className="max-h-48 overflow-y-auto wgm-scrollbar space-y-1.5 mb-5">
-        {roster.map((w) => (
-          <label key={w.id} className="flex items-center gap-2 rounded-md p-2 text-xs" style={{ backgroundColor: selected.includes(w.id) ? C.canvasAlt : 'transparent', border: `1px solid ${C.line}` }}>
-            <input type="checkbox" checked={selected.includes(w.id)} onChange={() => toggle(w.id)} disabled={!!w.injury} />
-            <span className="flex-1" style={{ color: w.injury ? C.inkFaint : C.ink }}>{w.name} {w.injury && '(injured)'}</span>
-            <AlignmentBadge alignment={w.alignment} />
-          </label>
-        ))}
+        {roster.map((w) => {
+          const holdout = w.ambition && w.ambition.status === 'holdout';
+          const unavailable = !!w.injury || holdout;
+          return (
+            <label key={w.id} className="flex items-center gap-2 rounded-md p-2 text-xs" style={{ backgroundColor: selected.includes(w.id) ? C.canvasAlt : 'transparent', border: `1px solid ${C.line}` }}>
+              <input type="checkbox" checked={selected.includes(w.id)} onChange={() => toggle(w.id)} disabled={unavailable} />
+              <span className="flex-1" style={{ color: unavailable ? C.inkFaint : C.ink }}>{w.name} {w.injury && '(injured)'}{holdout && '(holdout)'}</span>
+              <AlignmentBadge alignment={w.alignment} />
+            </label>
+          );
+        })}
       </div>
 
       <PrimaryButton full disabled={selected.length === 0} onClick={() => onAdd({ kind: 'promo', id: uid(), participantIds: selected, purpose })}>Add to Card</PrimaryButton>
@@ -2894,7 +3474,7 @@ function BusinessModal({
   onPurchaseRingShape, onEquipRingShape,
   onAddConcession, onSetConcessionPrice, onRemoveConcession,
   onAddMerch, onSetMerchPrice, onSetMerchWrestler, onRemoveMerch,
-  onPurchaseWeaponItem,
+  onPurchaseWeaponItem, onStartResearch,
 }) {
   const [section, setSection] = useState('ring');
   const SECTIONS = [
@@ -2902,6 +3482,7 @@ function BusinessModal({
     { id: 'concessions', label: 'Concessions' },
     { id: 'merch', label: 'Merch' },
     { id: 'weapons', label: 'Weapons' },
+    { id: 'research', label: 'Match Types' },
     { id: 'facility', label: 'Facility' },
   ];
 
@@ -2920,7 +3501,7 @@ function BusinessModal({
               const active = company.ringShape === shape.id;
               const synergy = shape.matchesStyles.includes(company.style);
               return (
-                <div key={shape.id} className="rounded-lg p-3" style={{ backgroundColor: active ? 'rgba(196,146,46,0.12)' : C.cream, border: `1px solid ${active ? C.gold : C.line}` }}>
+                <div key={shape.id} className="rounded-lg p-3" style={{ backgroundColor: active ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.12)' : C.cream, border: `1px solid ${active ? C.gold : C.line}` }}>
                   <div className="flex items-center justify-between mb-1">
                     <p className="text-sm font-bold" style={{ color: C.ink }}>{shape.name}</p>
                     {synergy && <Pill bg={C.gold} color={C.ink}>STYLE MATCH</Pill>}
@@ -2966,7 +3547,7 @@ function BusinessModal({
             {WEAPON_ITEMS_CATALOG.map((item) => {
               const owned = company.weaponsOwned.includes(item.id);
               return (
-                <div key={item.id} className="rounded-lg p-3" style={{ backgroundColor: owned ? 'rgba(196,146,46,0.1)' : C.cream, border: `1px solid ${C.line}` }}>
+                <div key={item.id} className="rounded-lg p-3" style={{ backgroundColor: owned ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.1)' : C.cream, border: `1px solid ${C.line}` }}>
                   <p className="text-sm font-bold" style={{ color: C.ink }}>{item.name}</p>
                   <p className="wgm-mono text-[9px] mt-1" style={{ color: C.inkFaint }}>+{Math.round(item.qualityBonus * 100)}% QUALITY · +{Math.round((item.injuryMult - 1) * 100)}% RISK</p>
                   <div className="mt-2">
@@ -2976,6 +3557,52 @@ function BusinessModal({
                       <GhostButton onClick={() => onPurchaseWeaponItem(item.id)} disabled={company.funds < item.cost}>Buy ({money(item.cost)})</GhostButton>
                     )}
                   </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {section === 'research' && (
+        <div>
+          <p className="text-xs mb-3" style={{ color: C.inkFaint }}>Research and unlock new match stipulations. Only one project can be in development at a time.</p>
+          {company.matchResearch.inProgress && (() => {
+            const inProg = RESEARCHABLE_MATCH_TYPES.find((t) => t.id === company.matchResearch.inProgress.typeId);
+            const pct = Math.round(((inProg.researchWeeks - company.matchResearch.inProgress.weeksRemaining) / inProg.researchWeeks) * 100);
+            return (
+              <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: C.ink }}>
+                <p className="text-sm font-bold" style={{ color: C.cream }}>Researching: {inProg.label}</p>
+                <div className="mt-2 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(246,240,225,0.15)' }}>
+                  <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: C.gold }} />
+                </div>
+                <p className="wgm-mono text-[9px] mt-1" style={{ color: 'rgba(246,240,225,0.6)' }}>{company.matchResearch.inProgress.weeksRemaining} WEEK{company.matchResearch.inProgress.weeksRemaining !== 1 ? 'S' : ''} REMAINING</p>
+              </div>
+            );
+          })()}
+          <div className="space-y-2">
+            {RESEARCHABLE_MATCH_TYPES.map((t) => {
+              const unlocked = company.matchResearch.unlockedTypes.includes(t.id);
+              const repOk = company.reputation >= t.minRep;
+              const weaponsOk = !t.requiresWeapons || t.requiresWeapons.every((w) => company.weaponsOwned.includes(w));
+              const canStart = !unlocked && !company.matchResearch.inProgress && repOk && weaponsOk && company.funds >= t.researchCost;
+              return (
+                <div key={t.id} className="rounded-lg p-3" style={{ backgroundColor: unlocked ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.1)' : C.cream, border: `1px solid ${C.line}` }}>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-sm font-bold" style={{ color: C.ink }}>{t.label}</p>
+                    {unlocked && <Pill bg={C.gold} color={C.ink}>UNLOCKED</Pill>}
+                  </div>
+                  <p className="text-[11px] mb-1.5" style={{ color: C.inkFaint }}>{t.desc}</p>
+                  <p className="wgm-mono text-[9px] mb-2" style={{ color: C.inkFaint }}>
+                    {money(t.researchCost)} · {t.researchWeeks}WK · NEEDS {t.minRep} REP{t.requiresWeapons ? ` · NEEDS ${t.requiresWeapons.join(' & ').toUpperCase()}` : ''}
+                  </p>
+                  {!unlocked && (
+                    <>
+                      {!repOk && <p className="text-[10px] mb-1" style={{ color: C.rope }}>Reputation too low.</p>}
+                      {!weaponsOk && <p className="text-[10px] mb-1" style={{ color: C.rope }}>Missing required weapons.</p>}
+                      <GhostButton onClick={() => onStartResearch(t.id)} disabled={!canStart}>Start Research</GhostButton>
+                    </>
+                  )}
                 </div>
               );
             })}
@@ -3005,7 +3632,7 @@ function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove
           const entry = menu.find((e) => e.itemId === item.id);
           const inMenu = !!entry;
           return (
-            <div key={item.id} className="rounded-lg p-3" style={{ backgroundColor: inMenu ? 'rgba(196,146,46,0.08)' : C.cream, border: `1px solid ${C.line}` }}>
+            <div key={item.id} className="rounded-lg p-3" style={{ backgroundColor: inMenu ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.08)' : C.cream, border: `1px solid ${C.line}` }}>
               <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-bold" style={{ color: C.ink }}>{item.name}{item.isAwareness && <span className="wgm-mono text-[9px] ml-1" style={{ color: C.gold }}>+ BUZZ</span>}</p>
                 {!inMenu && <span className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>Suggested {money(item.suggestedPrice)}</span>}
@@ -3085,6 +3712,12 @@ function FeudBuilderModal({ roster, onClose, onCreate }) {
 function FeudDetailModal({ feud, onClose, onEnd }) {
   return (
     <Modal title={`${feud.aName} vs ${feud.bName}`} onClose={onClose} wide>
+      {feud.hook && (
+        <div className="flex items-center gap-2 mb-3">
+          <Flame size={13} color={C.rope} />
+          <p className="text-xs italic" style={{ color: C.inkFaint }}>{feud.hook}</p>
+        </div>
+      )}
       <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.ink }}>
         <p className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.55)' }}>HEAT</p>
         <div className="mt-1 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(246,240,225,0.15)' }}>
@@ -3098,7 +3731,7 @@ function FeudDetailModal({ feud, onClose, onEnd }) {
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>STORYLINE LOG</p>
       <div className="space-y-1.5 mb-5 max-h-64 overflow-y-auto wgm-scrollbar">
         {[...feud.log].reverse().map((entry, i) => (
-          <div key={i} className="rounded-md p-2.5 flex items-start gap-2" style={{ backgroundColor: entry.blowOff ? 'rgba(172,58,44,0.1)' : C.cream, border: `1px solid ${C.line}` }}>
+          <div key={i} className="rounded-md p-2.5 flex items-start gap-2" style={{ backgroundColor: entry.blowOff ? 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.1)' : C.cream, border: `1px solid ${C.line}` }}>
             {entry.blowOff && <Flame size={13} color={C.rope} className="mt-0.5 shrink-0" />}
             <div>
               <p className="text-xs" style={{ color: C.ink }}>{entry.text}</p>
@@ -3199,6 +3832,87 @@ function RivalsModal({ rivals, company, onClose, onSetRelationship }) {
                   </button>
                 ))}
               </div>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================================================
+   WRESTLING MEDIA MODAL
+   ============================================================ */
+function MediaModal({ recaps, companyName, onClose }) {
+  const [expandedId, setExpandedId] = useState(recaps.length ? recaps[0].id : null);
+
+  return (
+    <Modal title="Wrestling Media" onClose={onClose} wide>
+      {recaps.length === 0 && <EmptyState text="No issues published yet. Run shows for four weeks to see your first monthly recap." />}
+      <div className="space-y-2">
+        {recaps.map((r) => {
+          const expanded = expandedId === r.id;
+          return (
+            <div key={r.id} className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+              <button onClick={() => setExpandedId(expanded ? null : r.id)} className="w-full p-3 flex items-center justify-between text-left" style={{ backgroundColor: C.ink }}>
+                <div>
+                  <p className="wgm-display text-base" style={{ color: C.cream }}>Month {r.month}, Year {r.year}</p>
+                  <p className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.55)' }}>{r.shows} show{r.shows !== 1 ? 's' : ''} · {r.avgStars.toFixed(1)}★ avg</p>
+                </div>
+                <ChevronDown size={16} color={C.cream} style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
+              </button>
+              {expanded && (
+                <div className="p-3 space-y-3" style={{ backgroundColor: C.cream }}>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div><p className="wgm-mono text-[8px]" style={{ color: C.inkFaint }}>ATTENDANCE</p><p className="wgm-mono text-xs font-bold" style={{ color: C.ink }}>{r.totalAttendance.toLocaleString()}</p></div>
+                    <div><p className="wgm-mono text-[8px]" style={{ color: C.inkFaint }}>REVENUE</p><p className="wgm-mono text-xs font-bold" style={{ color: C.good }}>{money(r.totalRevenue)}</p></div>
+                    <div><p className="wgm-mono text-[8px]" style={{ color: C.inkFaint }}>PROFIT</p><p className="wgm-mono text-xs font-bold" style={{ color: r.totalProfit >= 0 ? C.good : C.rope }}>{money(r.totalProfit)}</p></div>
+                  </div>
+
+                  {r.topMatch && (
+                    <div>
+                      <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>MATCH OF THE MONTH</p>
+                      <div className="rounded-md p-2" style={{ backgroundColor: C.canvasAlt }}>
+                        <p className="text-xs font-semibold" style={{ color: C.ink }}>{r.topMatch.label}</p>
+                        <div className="flex items-center gap-2 mt-1">
+                          <StarRow value={r.topMatch.stars} size={11} />
+                          <span className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>Week {r.topMatch.week}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {r.titleChanges.length > 0 && (
+                    <div>
+                      <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>TITLE CHANGES</p>
+                      <div className="space-y-1">
+                        {r.titleChanges.map((tc, i) => (
+                          <div key={i} className="flex items-center gap-1.5 rounded-md p-2" style={{ backgroundColor: C.canvasAlt }}>
+                            <Crown size={12} color={C.gold} fill={C.gold} />
+                            <p className="text-[11px]" style={{ color: C.ink }}>{tc.winner} won the {tc.titleName} — Week {tc.week}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>POWER RANKINGS</p>
+                    <div className="space-y-1">
+                      {r.powerRankings.map((w, i) => (
+                        <div key={w.id} className="flex items-center gap-2 rounded-md p-2" style={{ backgroundColor: C.canvasAlt }}>
+                          <span className="wgm-mono text-xs font-bold w-4" style={{ color: C.gold }}>{i + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[11px] font-semibold truncate" style={{ color: C.ink }}>{w.name}</p>
+                            <p className="text-[9px] italic truncate" style={{ color: C.inkFaint }}>"{w.gimmick}"</p>
+                          </div>
+                          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>POP {w.popularity}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
