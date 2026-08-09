@@ -71,7 +71,7 @@
 
 <script type="module">
   try {
-    const res = await fetch('./wrestling-gm.jsx');
+    const res = await fetch('./wrestling-gm.jsx?v=' + Date.now(), { cache: 'no-store' });
     if (!res.ok) throw new Error('Could not find wrestling-gm.jsx next to this index.html (HTTP ' + res.status + ')');
     const source = await res.text();
 
