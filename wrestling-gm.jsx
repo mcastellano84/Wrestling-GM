@@ -99,6 +99,12 @@ const FONT_STYLE = `
   box-shadow: inset 0 0 0 3px ${C.canvas}, inset 0 0 0 4px var(--wgm-gold, #C4922E);
 }
 .wgm-poster-corner { position: absolute; width: 14px; height: 14px; border: 2px solid var(--wgm-gold, #C4922E); }
+.wgm-rope-frame {
+  border: 9px solid;
+  border-image-slice: 1;
+  border-image-source: repeating-linear-gradient(135deg, var(--wgm-gold, #C4922E) 0px, var(--wgm-gold, #C4922E) 4px, ${C.ink} 4px, ${C.ink} 8px);
+}
+.wgm-bout-divider { border-top: 1px solid rgba(27,23,18,0.25); }
 
 /* History: ledger / records */
 .wgm-ledger { background-image: repeating-linear-gradient(180deg, transparent, transparent 30px, rgba(27,23,18,0.075) 30px, rgba(27,23,18,0.075) 31px); }
@@ -215,6 +221,14 @@ const REGION_NAMES = {
   uk: { first: { male: ['Oliver', 'Jack', 'Harry', 'George', 'Charlie', 'Alfie', 'Freddie', 'Archie', 'Reggie', 'Stanley'], female: ['Poppy', 'Amelia', 'Isla', 'Freya', 'Daisy', 'Ruby'] }, last: ['Smith', 'Jones', 'Taylor', 'Brown', 'Wilson', 'Evans', 'Thomas', 'Roberts', 'Walker', 'Wright', 'Baker', 'Hughes'] },
   australia: { first: { male: ['Jack', 'Cooper', 'Levi', 'Hunter', 'Mason', 'Riley', 'Tyson', 'Bailey', 'Zac', 'Dusty'], female: ['Chloe', 'Matilda', 'Sienna', 'Mackenzie', 'Charlotte', 'Grace'] }, last: ['Anderson', 'Mitchell', 'Clarke', 'Kelly', 'White', 'Hall', 'Turner', 'Cooper', 'Ward', 'Fraser', 'Bishop', 'Marsh'] },
   germany: { first: { male: ['Lukas', 'Felix', 'Jonas', 'Maximilian', 'Sebastian', 'Florian', 'Niklas', 'Dominik', 'Matthias', 'Stefan'], female: ['Greta', 'Hanna', 'Lena', 'Frieda', 'Ilse', 'Katrin'] }, last: ['Muller', 'Schmidt', 'Schneider', 'Fischer', 'Weber', 'Wagner', 'Becker', 'Hoffmann', 'Schulz', 'Koch', 'Richter', 'Klein'] },
+};
+const REGION_HOMETOWNS = {
+  usa: ['New York, NY', 'Chicago, IL', 'Houston, TX', 'Memphis, TN', 'Charlotte, NC', 'Kansas City, MO', 'Pittsburgh, PA', 'Portland, OR', 'Atlanta, GA', 'Phoenix, AZ', 'Detroit, MI', 'Nashville, TN'],
+  mexico: ['Mexico City', 'Guadalajara', 'Monterrey', 'Tijuana', 'Puebla', 'Cancun', 'Veracruz', 'Leon'],
+  japan: ['Tokyo', 'Osaka', 'Nagoya', 'Yokohama', 'Fukuoka', 'Sapporo', 'Kobe', 'Kyoto'],
+  uk: ['London', 'Manchester', 'Birmingham', 'Liverpool', 'Glasgow', 'Leeds', 'Newcastle', 'Cardiff'],
+  australia: ['Sydney', 'Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Gold Coast', 'Newcastle'],
+  germany: ['Berlin', 'Hamburg', 'Munich', 'Cologne', 'Frankfurt', 'Stuttgart', 'Dortmund'],
 };
 
 const STYLE_CONFIG = {
@@ -615,6 +629,8 @@ function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainmen
     confidence: randInt(cfg.confRange[0], cfg.confRange[1]),
     wellness: { status: 'stable', weeksInStatus: 0 },
     storyline: [],
+    hometown: pick(REGION_HOMETOWNS[regionId] || REGION_HOMETOWNS.usa),
+    weight: clamp(180 + Math.round((stats.strength / 99) * 130) + randInt(-15, 15), 175, 340),
   };
 }
 
@@ -740,6 +756,28 @@ function createRelationshipObject(aId, aName, bId, bName, type, week, year) {
 }
 function relationshipPairPresent(rel, participantIds) {
   return participantIds.includes(rel.aId) && participantIds.includes(rel.bId);
+}
+function randomPreexistingRelType() {
+  const r = Math.random();
+  if (r < 0.5) return 'friends';
+  if (r < 0.75) return 'rivals';
+  if (r < 0.9) return 'family';
+  return 'spouses';
+}
+function seedAutoRelationships(roster, week, year) {
+  const rels = [];
+  const pool = [...roster];
+  const pairChance = 0.5;
+  for (let i = 0; i < pool.length && rels.length < 2; i++) {
+    if (Math.random() > pairChance) continue;
+    const others = pool.filter((w) => w.id !== pool[i].id && !rels.some((r) => (r.aId === w.id || r.bId === w.id) && (r.aId === pool[i].id || r.bId === pool[i].id)));
+    if (!others.length) continue;
+    const partner = pick(others);
+    const already = rels.some((r) => (r.aId === pool[i].id && r.bId === partner.id) || (r.aId === partner.id && r.bId === pool[i].id));
+    if (already) continue;
+    rels.push(createRelationshipObject(pool[i].id, pool[i].name, partner.id, partner.name, randomPreexistingRelType(), week, year));
+  }
+  return rels;
 }
 
 /* ---------- Wellness (personal struggles) ---------- */
@@ -878,47 +916,101 @@ const ADVISOR_ROLES = [
   { key: 'cfo', title: 'CFO', icon: DollarSign },
 ];
 function roadAgentMemo(game) {
-  const { roster, history } = game;
+  const { roster, history, tagTeams } = game;
   const holdouts = roster.filter((w) => w.ambition && w.ambition.status === 'holdout');
+  const struggling = roster.filter((w) => w.wellness && w.wellness.status === 'struggling');
   const injured = roster.filter((w) => w.injury);
+  const lowConfidence = roster.filter((w) => w.confidence < 40);
   const avgCondition = roster.length ? average(roster.map((w) => w.condition)) : 100;
   const lastShow = history[0];
-  if (holdouts.length) return `${holdouts[0].name} is refusing to work. That's on you to sort out before we can build around them.`;
-  if (avgCondition < 55) return `The roster's gassed. Ease up on the schedule or we're going to see more injuries.`;
+  const rustyTeam = (tagTeams || []).find((t) => t.chemistry < 30);
+  if (holdouts.length) return pick([
+    `${holdouts[0].name} is refusing to work. That's on you to sort out before we can build around them.`,
+    `Nobody's touching a card with ${holdouts[0].name} on it 'til that situation gets handled.`,
+  ]);
+  if (struggling.length) return `${struggling[0].name} isn't right lately. I'd keep them off the road until that's dealt with.`;
+  if (avgCondition < 55) return `The roster's averaging ${Math.round(avgCondition)} condition. Ease up on the schedule or we're going to see more injuries.`;
   if (injured.length >= 3) return `We've got ${injured.length} bodies out with injuries. Depth's getting thin back there.`;
-  if (lastShow && lastShow.avgStars >= 3.75) return `Hell of a show last time out. Keep booking it that way.`;
-  if (lastShow && lastShow.avgStars < 2) return `That last show didn't click in the ring. Might be worth freshening up the card.`;
-  return `Card's looking fine from where I sit. Nothing urgent this week.`;
+  if (injured.length === 1) return `${injured[0].name}'s the only one banged up right now. Not bad.`;
+  if (lowConfidence.length >= 2) return `A few of the younger guys are still finding their feet out there — ${lowConfidence.length} of them are shaky on confidence. Watch who you put in the big matches.`;
+  if (rustyTeam) return `${rustyTeam.name} still don't have any chemistry together. Give 'em more reps or split 'em up.`;
+  if (lastShow && lastShow.avgStars >= 4) return pick([
+    `${lastShow.avgStars.toFixed(1)} stars last time out — hell of a show. Keep booking it that way.`,
+    `That last card was as good as we've had. Whatever you did, do it again.`,
+  ]);
+  if (lastShow && lastShow.avgStars >= 3.25) return `Solid ${lastShow.avgStars.toFixed(1)}-star show last week. Nothing to complain about.`;
+  if (lastShow && lastShow.avgStars < 2) return `That ${lastShow.avgStars.toFixed(1)}-star show didn't click in the ring. Might be worth freshening up the card.`;
+  return pick([
+    `Card's looking fine from where I sit. Nothing urgent this week.`,
+    `Roster's in decent shape. No fires to put out right now.`,
+  ]);
 }
 function medicalMemo(game) {
   const { roster, company } = game;
   const injured = roster.filter((w) => w.injury);
-  const medTier = upgradeLevel(company, 'medical');
+  const longTermInjured = injured.filter((w) => w.injury.weeksLeft >= 6);
+  const medTier = upgradeLevel(game.company, 'medical');
+  const avgAge = roster.length ? average(roster.map((w) => w.age)) : 28;
+  const struggling = roster.filter((w) => w.wellness && w.wellness.status === 'struggling');
+  const onLeave = roster.filter((w) => w.wellness && w.wellness.status === 'in_program');
+  if (longTermInjured.length) return `${longTermInjured[0].name} is looking at a long recovery — ${longTermInjured[0].injury.weeksLeft} weeks. Plan around it.`;
   if (injured.length >= 4) return `Full trainer's room this week — ${injured.length} out. We need to talk about pacing the schedule.`;
+  if (struggling.length) return `${struggling[0].name}'s wellbeing is more of a concern to me than anything physical right now. That's worth addressing.`;
+  if (onLeave.length) return `${onLeave[0].name}'s taking the time they need. We'll have them back before long.`;
   if (injured.length >= 1 && medTier === 1) return `Our medical setup is bare-bones. An upgrade in the Shop would speed up recoveries.`;
-  if (injured.length === 0) return `Clean bill of health across the board, for once. Let's keep it that way.`;
+  if (avgAge >= 34 && medTier <= 2) return `This is a veteran locker room — average age ${Math.round(avgAge)}. A better medical setup would go a long way with bodies like these.`;
+  if (injured.length === 0) return pick([
+    `Clean bill of health across the board, for once. Let's keep it that way.`,
+    `Nobody's on the shelf right now. I'll take it.`,
+  ]);
   return `A couple of bumps and bruises out there, nothing the training room can't handle.`;
 }
 function writerMemo(game) {
-  const { feuds, titles, roster } = game;
+  const { feuds, titles, roster, stables, tagTeams } = game;
   const activeFeuds = feuds.filter((f) => f.status !== 'ended');
-  const hotFeud = activeFeuds.find((f) => f.heat >= 70);
+  const hotFeud = [...activeFeuds].sort((a, b) => b.heat - a.heat)[0];
+  const coldFeud = activeFeuds.find((f) => f.heat < 20 && f.matchCount > 0);
   const vacantTitle = titles.find((t) => t.holderIds.length === 0);
   const unhappy = roster.filter((w) => w.ambition && (w.ambition.status === 'unhappy' || w.ambition.status === 'holdout'));
-  if (hotFeud) return `${hotFeud.aName} vs ${hotFeud.bName} is money right now. Let's pull the trigger on that blow-off soon.`;
+  const closeToGoal = roster.find((w) => w.ambition && w.ambition.status === 'content' && w.ambition.satisfaction >= 85 && w.ambition.type === 'beat_rival');
+  const unusedStable = (stables || []).find((s) => s.cohesion < 25);
+  if (hotFeud && hotFeud.heat >= 70) return pick([
+    `${hotFeud.aName} vs ${hotFeud.bName} is sitting at ${hotFeud.heat} heat. That's money — pull the trigger on the blow-off soon.`,
+    `Fans are hot for ${hotFeud.aName} and ${hotFeud.bName}. Don't let that program go cold before you cash it in.`,
+  ]);
   if (vacantTitle) return `The ${vacantTitle.name} is just sitting there vacant. We should crown somebody.`;
-  if (activeFeuds.length === 0) return `We've got no heat going into next month. We need some fresh stories on the board.`;
+  if (closeToGoal && closeToGoal.ambition.targetName) return `${closeToGoal.name} has been vocal about wanting a win over ${closeToGoal.ambition.targetName}. Feels like the time is right.`;
+  if (activeFeuds.length === 0) return pick([
+    `We've got no heat going into next month. We need some fresh stories on the board.`,
+    `Creative's dry right now — not a single feud running. Let's fix that.`,
+  ]);
   if (unhappy.length >= 3) return `Locker room's grumbling — ${unhappy.length} guys need something to care about right now.`;
-  return `Nothing screaming at me this week. Business as usual on the creative side.`;
+  if (coldFeud) return `${coldFeud.aName} and ${coldFeud.bName} have gone cold — heat's down to ${coldFeud.heat}. Either reheat it or wrap it up.`;
+  if (unusedStable) return `${unusedStable.name} hasn't been on the same card together in a while. A faction only means something if we use it.`;
+  return pick([
+    `Nothing screaming at me this week. Business as usual on the creative side.`,
+    `The board's steady. No urgent moves needed from my side.`,
+  ]);
 }
 function cfoMemo(game) {
-  const { company, history } = game;
+  const { company, history, draftShow } = game;
   const lastShow = history[0];
+  const avgLast4 = history.length ? average(history.slice(0, 4).map((h) => h.netProfit)) : 0;
+  if (company.funds < 1500) return `We're nearly out of cash. One bad show from here and we can't make payroll.`;
   if (company.funds < 3000) return `Cash is tight. I'd ease off marketing spend or bump ticket prices before we book again.`;
-  if (lastShow && lastShow.netProfit < 0) return `We lost money last show. Worth a look at the venue and ticket price before the next one.`;
-  if (lastShow && lastShow.netProfit > 10000) return `Strong numbers on the books after that last show. We can afford to reinvest.`;
-  if (company.funds > 100000) return `We're sitting on a healthy reserve. Might be time to spend it on the roster or the building.`;
-  return `Books are balanced. Nothing alarming on my end.`;
+  if (lastShow && lastShow.netProfit < 0 && history.length >= 3 && avgLast4 < 0) return `We've lost money on multiple shows running now. This isn't a one-off — something in the model needs to change.`;
+  if (lastShow && lastShow.netProfit < 0) return `We lost ${money(Math.abs(lastShow.netProfit))} last show. Worth a look at the venue and ticket price before the next one.`;
+  if (company.tvDeal === null && company.reputation >= 25) return `We've got the reputation for a TV deal and we're leaving that revenue on the table. Worth a look in the Shop.`;
+  if (lastShow && lastShow.netProfit > 15000) return pick([
+    `Strong numbers on the books after that last show. We can afford to reinvest.`,
+    `${money(lastShow.netProfit)} net on the last show. That's the kind of number I like to see.`,
+  ]);
+  if (company.funds > 150000) return `We're sitting on a healthy reserve — over ${money(company.funds)}. Might be time to spend it on the roster or the building.`;
+  if (draftShow && draftShow.marketingBudget > 5000 && company.reputation < 30) return `That's a big marketing spend for a promotion our size. Make sure it's actually moving the needle before we do it again.`;
+  return pick([
+    `Books are balanced. Nothing alarming on my end.`,
+    `Financially, we're steady. No complaints from accounting this week.`,
+  ]);
 }
 function advisorMemo(role, game) {
   switch (role) {
@@ -1093,12 +1185,17 @@ function simulateMatch(match, wrestlerLookup, tagTeams = [], upgrades = {}, feud
   return { beatLog, finalStars, crowdTier, injuries, perfTracker, finishLabel: finishType.label };
 }
 
-function computePromoPop(promo, wrestlerLookup) {
+function computePromoPop(promo, wrestlerLookup, staffLookup) {
   const parts = promo.participantIds.map((id) => wrestlerLookup[id]).filter(Boolean);
   if (!parts.length) return 50;
   const avgCharisma = average(parts.map((p) => p.stats.charisma));
   const avgPop = average(parts.map((p) => p.popularity));
-  return clamp(Math.round(avgCharisma * 0.6 + avgPop * 0.3 + randInt(-8, 8)), 5, 100);
+  let base = avgCharisma * 0.6 + avgPop * 0.3 + randInt(-8, 8);
+  if (promo.hostStaffId && staffLookup && staffLookup[promo.hostStaffId]) {
+    const host = staffLookup[promo.hostStaffId];
+    base += (staffEffectiveQuality(host) - 50) / 4;
+  }
+  return clamp(Math.round(base), 5, 100);
 }
 
 function computeFillFactors(draftShow, game) {
@@ -1138,6 +1235,8 @@ function simulateShow(draftShow, game) {
   const diff = DIFFICULTY_CONFIG[game.company.difficulty] || DIFFICULTY_CONFIG.normal;
   const wrestlerLookup = {};
   game.roster.forEach((w) => { wrestlerLookup[w.id] = w; });
+  const staffLookup = {};
+  [...game.staff.announcers, ...game.staff.commentators].forEach((s) => { staffLookup[s.id] = s; });
 
   const matchUpgrades = {
     ring: game.company.upgrades.ring,
@@ -1145,7 +1244,7 @@ function simulateShow(draftShow, game) {
     weaponsOwned: game.company.weaponsOwned || [],
   };
   const matchResults = draftShow.card.filter((s) => s.kind === 'match').map((m) => ({ ...m, result: simulateMatch(m, wrestlerLookup, game.tagTeams, matchUpgrades, game.feuds) }));
-  const promoResults = draftShow.card.filter((s) => s.kind === 'promo').map((p) => ({ ...p, pop: computePromoPop(p, wrestlerLookup) }));
+  const promoResults = draftShow.card.filter((s) => s.kind === 'promo').map((p) => ({ ...p, pop: computePromoPop(p, wrestlerLookup, staffLookup) }));
 
   const ticketRevenue = Math.round(attendance * draftShow.ticketPrice * diff.revenueMult);
   const concessionsRevenue = Math.round(computeConcessionsRevenue(game.company, attendance) * diff.revenueMult);
@@ -1183,6 +1282,10 @@ function createNewGame(opts) {
   const fundsTier = FUNDS_TIERS.find((f) => f.id === fundsTierId) || FUNDS_TIERS[1];
   const resolvedTheme = theme || DEFAULT_THEME;
   const background = BOSS_BACKGROUNDS.find((b) => b.id === backgroundId) || BOSS_BACKGROUNDS[2];
+  const startingRoster = [
+    ...Array.from({ length: 3 }, () => generateWrestler('Rookie', region, style)),
+    ...Array.from({ length: 3 }, () => generateWrestler('Mid-Card', region, style)),
+  ];
   return {
     company: {
       name: name || 'Independent Wrestling',
@@ -1195,18 +1298,15 @@ function createNewGame(opts) {
       upgrades: { ...DEFAULT_UPGRADES },
       ringShape: DEFAULT_RING_SHAPE,
       ringShapesOwned: [DEFAULT_RING_SHAPE],
-      concessionsMenu: [],
-      merchMenu: [],
+      concessionsMenu: [{ itemId: 'hotdogs', price: 5 }, { itemId: 'soda', price: 4 }],
+      merchMenu: [{ itemId: 'tshirt', price: 20, wrestlerId: null }],
       weaponsOwned: [],
       tvDeal: null,
       matchResearch: { unlockedTypes: [], inProgress: null },
       advisors: generateAdvisors(region),
       acquisitionsCount: 0,
     },
-    roster: [
-      ...Array.from({ length: 3 }, () => generateWrestler('Rookie', region, style)),
-      ...Array.from({ length: 3 }, () => generateWrestler('Mid-Card', region, style)),
-    ],
+    roster: startingRoster,
     freeAgents: generateFreeAgentPool(region, style),
     staff: { announcers: [generateStaff('Announcer')], commentators: [generateStaff('Commentator')] },
     staffPool: { announcers: Array.from({ length: 3 }, () => generateStaff('Announcer')), commentators: Array.from({ length: 3 }, () => generateStaff('Commentator')) },
@@ -1214,7 +1314,7 @@ function createNewGame(opts) {
     tagTeams: [],
     stables: [],
     feuds: [],
-    relationships: [],
+    relationships: seedAutoRelationships(startingRoster, 1, 1),
     rivals: generateRivalPromotions(rivalCount),
     mediaRecaps: [],
     history: [],
@@ -1231,7 +1331,7 @@ function normalizeGame(loaded) {
     const titleId = item.titleId !== undefined ? item.titleId : null;
     return { ...item, winnerIds, titleId };
   });
-  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, storyline: w.storyline || [] });
+  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280) });
   const fixStaff = (s) => ({ ...s, trait: s.trait !== undefined ? s.trait : null, ambition: { unhappyStreak: 0, contentStreak: 0, ...(s.ambition || assignStaffAmbition()) }, weeksEmployed: s.weeksEmployed || 0 });
   const loadedCompany = loaded.company || {};
   const oldUpgrades = loadedCompany.upgrades || {};
@@ -1587,11 +1687,17 @@ export default function WrestlingGM() {
         else if (bossRep <= 30) bonus = Math.round(bonus * 1.25);
       }
       if (g.company.funds < bonus) { showToast('Not enough funds for the signing bonus.'); return g; }
+      let relationships = g.relationships;
+      if (g.roster.length && Math.random() < 0.2) {
+        const other = pick(g.roster);
+        relationships = [...relationships, createRelationshipObject(w.id, w.name, other.id, other.name, randomPreexistingRelType(), g.company.week, g.company.year)];
+      }
       return {
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
         roster: [...g.roster, { ...w, contractWeeksLeft: randInt(12, 26), storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Signed with ${g.company.name}.` }].slice(-20) }],
         freeAgents: g.freeAgents.filter((f) => f.id !== id),
+        relationships,
       };
     });
     showToast('Wrestler signed.');
@@ -2199,6 +2305,21 @@ export default function WrestlingGM() {
       });
       nextRelationships = nextRelationships.filter((rel) => !departingIds.has(rel.aId) && !departingIds.has(rel.bId));
     }
+    allSegments.forEach((ids) => {
+      if (ids.length < 2 || nextRelationships.length > 60) return;
+      if (Math.random() > 0.05) return;
+      const shuffled = [...ids].sort(() => Math.random() - 0.5);
+      const [aId, bId] = shuffled;
+      if (!aId || !bId || aId === bId) return;
+      const exists = nextRelationships.some((r) => (r.aId === aId && r.bId === bId) || (r.aId === bId && r.bId === aId));
+      if (exists) return;
+      const a = stillRoster.find((r) => r.id === aId); const b = stillRoster.find((r) => r.id === bId);
+      if (!a || !b) return;
+      nextRelationships = [...nextRelationships, createRelationshipObject(a.id, a.name, b.id, b.name, 'friends', game.company.week, game.company.year)];
+      relationshipNews.push(`${a.name} and ${b.name} have become friends backstage.`);
+      addStoryline(a.id, `Became friends with ${b.name} backstage.`);
+      addStoryline(b.id, `Became friends with ${a.name} backstage.`);
+    });
     if (Object.keys(relationshipMoraleDeltas).length) {
       rosterAfterAmbitions = rosterAfterAmbitions.map((w) => (
         relationshipMoraleDeltas[w.id] ? { ...w, morale: clamp(w.morale + relationshipMoraleDeltas[w.id], 0, 100) } : w
@@ -2604,7 +2725,7 @@ export default function WrestlingGM() {
         {tab === 'book' && (
           <BookShowTab
             draftShow={draftShow} draftVenue={draftVenue} unlocked={unlocked} estimate={estimate}
-            roster={roster} healthyRoster={healthyRoster} titles={titles} feuds={feuds} funds={company.funds}
+            roster={roster} healthyRoster={healthyRoster} titles={titles} feuds={feuds} funds={company.funds} company={company}
             onUpdateDraft={updateDraft} onOpenMatchBuilder={() => setMatchBuilderOpen(true)}
             onOpenPromoBuilder={() => setPromoBuilderOpen(true)} onRemove={removeCardItem} onMove={moveCardItem}
             onRun={runShow}
@@ -2729,7 +2850,7 @@ export default function WrestlingGM() {
       {/* Promo builder */}
       {promoBuilderOpen && (
         <PromoBuilderModal
-          roster={roster} onClose={() => setPromoBuilderOpen(false)}
+          roster={roster} staff={staff} onClose={() => setPromoBuilderOpen(false)}
           onAdd={(item) => { addCardItem(item); setPromoBuilderOpen(false); }}
         />
       )}
@@ -3589,8 +3710,13 @@ function StaffRow({ s, role, funds, onFire, onRaise }) {
 /* ============================================================
    BOOK SHOW TAB
    ============================================================ */
-function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onRun }) {
+function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, company, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onRun }) {
   const wrestlerName = (id) => (roster.find((r) => r.id === id) || {}).name || '???';
+  const wrestlerBilling = (id) => {
+    const w = roster.find((r) => r.id === id);
+    if (!w) return { name: '???', sub: '' };
+    return { name: w.name, sub: `${w.hometown || ''}${w.hometown && w.weight ? ' · ' : ''}${w.weight ? `${w.weight} lbs` : ''}` };
+  };
   return (
     <div className="space-y-4">
       <div>
@@ -3621,50 +3747,84 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
         <div><p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>EST. PROFIT</p><p className="wgm-display text-base" style={{ color: estimate.profit >= 0 ? C.good : C.rope }}>{money(estimate.profit)}</p></div>
       </div>
 
-      <div className="wgm-poster rounded-xl p-4 relative" style={{ backgroundColor: C.cream }}>
-        <div className="wgm-poster-corner rounded-tl" style={{ top: -2, left: -2, borderRight: 'none', borderBottom: 'none' }} />
-        <div className="wgm-poster-corner rounded-tr" style={{ top: -2, right: -2, borderLeft: 'none', borderBottom: 'none' }} />
-        <div className="wgm-poster-corner rounded-bl" style={{ bottom: -2, left: -2, borderRight: 'none', borderTop: 'none' }} />
-        <div className="wgm-poster-corner rounded-br" style={{ bottom: -2, right: -2, borderLeft: 'none', borderTop: 'none' }} />
+      <div className="wgm-rope-frame p-4" style={{ backgroundColor: C.cream }}>
+        <div className="text-center mb-3">
+          <p className="wgm-mono text-[9px] tracking-widest" style={{ color: C.inkFaint }}>{(company.name || 'INDEPENDENT WRESTLING').toUpperCase()} PRESENTS</p>
+          <h2 className="wgm-display text-3xl leading-tight" style={{ color: C.ink }}>WRESTLING</h2>
+          <p className="text-xs font-semibold mt-1" style={{ color: C.ink }}>{draftVenue.name}</p>
+          <p className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>WEEK {company.week} · YEAR {company.year} · {money(draftShow.ticketPrice)} ADMISSION</p>
+        </div>
 
-        <p className="wgm-mono text-[9px] text-center tracking-widest mb-0.5" style={{ color: C.inkFaint }}>{draftVenue.name.toUpperCase()}</p>
-        <h2 className="wgm-display text-2xl text-center mb-3" style={{ color: C.ink }}>TONIGHT'S CARD</h2>
-
-        <div className="space-y-2 mb-3">
+        <div className="space-y-3 mb-3">
           {draftShow.card.length === 0 && <EmptyState text="Add matches and promos to build your show." />}
           {draftShow.card.map((item, i) => {
             const isMainEvent = i === draftShow.card.length - 1 && item.kind === 'match';
+            const title = item.kind === 'match' && item.titleId ? titles.find((t) => t.id === item.titleId) : null;
+            const blowOffFeud = item.kind === 'match' && item.feudBlowOffId ? feuds.find((f) => f.id === item.feudBlowOffId) : null;
             return (
-              <div key={item.id} className="rounded-lg p-3" style={{ backgroundColor: C.ink, border: isMainEvent ? `1px solid ${C.gold}` : 'none' }}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 flex-1 min-w-0">
-                    <span className="wgm-display text-lg shrink-0" style={{ color: isMainEvent ? C.gold : 'rgba(246,240,225,0.35)' }}>{i + 1}</span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {isMainEvent && <Pill bg={C.gold} color={C.ink}>MAIN EVENT</Pill>}
-                        <Pill bg={C.gold} color={C.ink}>{(ALL_MATCH_TYPES.find((m) => m.id === item.typeId) || {}).label}</Pill>
-                        {item.titleId && <Pill bg={C.rope}>{(titles.find((t) => t.id === item.titleId) || {}).name || 'TITLE'}</Pill>}
-                        {item.feudBlowOffId && <Pill bg={C.rope}>BLOW-OFF: {(feuds.find((f) => f.id === item.feudBlowOffId) || {}).aName || 'FEUD'}</Pill>}
-                      </div>
-                      {item.kind === 'match' ? (
-                        <>
-                          <p className="text-sm font-semibold mt-1.5" style={{ color: C.cream }}>{item.participantIds.map(wrestlerName).join(' vs ')}</p>
-                          <p className="text-[11px]" style={{ color: 'rgba(246,240,225,0.55)' }}>Winner: {item.winnerIds.map(wrestlerName).join(' & ')} · {FINISH_TYPES.find((f) => f.id === item.finishId).label}</p>
-                        </>
-                      ) : (
-                        <>
-                          <Pill bg={C.steel}>PROMO · {item.purpose}</Pill>
-                          <p className="text-sm font-semibold mt-1.5" style={{ color: C.cream }}>{item.participantIds.map(wrestlerName).join(' & ')}</p>
-                        </>
-                      )}
+              <div key={item.id} className="wgm-bout-divider pt-3 first:border-t-0 first:pt-0 relative">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="wgm-mono text-[10px] font-bold" style={{ color: C.inkFaint }}>
+                    {isMainEvent ? 'MAIN EVENT' : `BOUT ${i + 1}`}{item.kind === 'promo' ? ' · SPECIAL ATTRACTION' : ''}
+                  </span>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => onMove(i, -1)} disabled={i === 0} className="p-1 rounded disabled:opacity-20"><ChevronUp size={12} color={C.inkFaint} /></button>
+                    <button onClick={() => onMove(i, 1)} disabled={i === draftShow.card.length - 1} className="p-1 rounded disabled:opacity-20"><ChevronDown size={12} color={C.inkFaint} /></button>
+                    <button onClick={() => onRemove(i)} className="p-1 rounded" style={{ backgroundColor: C.ropeDark }}><X size={11} color={C.cream} /></button>
+                  </div>
+                </div>
+
+                {title && <p className="wgm-display text-sm text-center mb-1" style={{ color: C.rope }}>{title.name.toUpperCase()} MATCH</p>}
+                {blowOffFeud && <p className="wgm-mono text-[9px] text-center mb-1 font-bold" style={{ color: C.rope }}>BLOW-OFF: THE FEUD SETTLES TONIGHT</p>}
+                <p className="wgm-mono text-[9px] text-center mb-2" style={{ color: C.inkFaint }}>{(ALL_MATCH_TYPES.find((m) => m.id === item.typeId) || {}).label || `PROMO · ${item.purpose}`}</p>
+
+                {item.kind === 'match' && item.participantIds.length === 2 ? (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 text-center">
+                      <p className={isMainEvent ? 'wgm-display text-lg' : 'text-sm font-bold'} style={{ color: C.ink }}>{wrestlerBilling(item.participantIds[0]).name}</p>
+                      <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{wrestlerBilling(item.participantIds[0]).sub}</p>
+                    </div>
+                    <span className="wgm-display text-sm shrink-0" style={{ color: C.rope }}>VS</span>
+                    <div className="flex-1 text-center">
+                      <p className={isMainEvent ? 'wgm-display text-lg' : 'text-sm font-bold'} style={{ color: C.ink }}>{wrestlerBilling(item.participantIds[1]).name}</p>
+                      <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{wrestlerBilling(item.participantIds[1]).sub}</p>
                     </div>
                   </div>
-                  <div className="flex flex-col gap-1 shrink-0">
-                    <button onClick={() => onMove(i, -1)} disabled={i === 0} className="p-1 rounded disabled:opacity-30"><ChevronUp size={14} color={C.cream} /></button>
-                    <button onClick={() => onMove(i, 1)} disabled={i === draftShow.card.length - 1} className="p-1 rounded disabled:opacity-30"><ChevronDown size={14} color={C.cream} /></button>
+                ) : item.kind === 'match' && item.sides ? (
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 text-center">
+                      {item.sides[0].map((pid) => (
+                        <div key={pid} className="mb-1">
+                          <p className="text-sm font-bold" style={{ color: C.ink }}>{wrestlerBilling(pid).name}</p>
+                          <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{wrestlerBilling(pid).sub}</p>
+                        </div>
+                      ))}
+                    </div>
+                    <span className="wgm-display text-sm shrink-0 mt-1" style={{ color: C.rope }}>VS</span>
+                    <div className="flex-1 text-center">
+                      {item.sides[1].map((pid) => (
+                        <div key={pid} className="mb-1">
+                          <p className="text-sm font-bold" style={{ color: C.ink }}>{wrestlerBilling(pid).name}</p>
+                          <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{wrestlerBilling(pid).sub}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <button onClick={() => onRemove(i)} className="p-1 rounded shrink-0" style={{ backgroundColor: C.ropeDark }}><X size={14} color={C.cream} /></button>
-                </div>
+                ) : item.kind === 'match' ? (
+                  <div className="text-center space-y-1">
+                    {item.participantIds.map((pid, j) => (
+                      <p key={pid} className="text-sm font-bold" style={{ color: C.ink }}>
+                        {wrestlerBilling(pid).name} <span className="wgm-mono text-[9px] font-normal" style={{ color: C.inkFaint }}>({wrestlerBilling(pid).sub})</span>{j < item.participantIds.length - 1 ? <span style={{ color: C.rope }}> · VS ·</span> : ''}
+                      </p>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm font-bold text-center" style={{ color: C.ink }}>{item.participantIds.map(wrestlerName).join(' & ')}</p>
+                )}
+
+                {item.kind === 'match' && (
+                  <p className="wgm-mono text-[9px] text-center mt-2" style={{ color: C.inkFaint }}>WINNER: {item.winnerIds.map(wrestlerName).join(' & ')} BY {FINISH_TYPES.find((f) => f.id === item.finishId).label.toUpperCase()}</p>
+                )}
               </div>
             );
           })}
@@ -3863,9 +4023,11 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedRes
 /* ============================================================
    PROMO BUILDER MODAL
    ============================================================ */
-function PromoBuilderModal({ roster, onClose, onAdd }) {
+function PromoBuilderModal({ roster, staff, onClose, onAdd }) {
   const [selected, setSelected] = useState([]);
   const [purpose, setPurpose] = useState(PROMO_PURPOSES[0]);
+  const [hostStaffId, setHostStaffId] = useState('');
+  const allStaff = [...(staff ? staff.announcers : []), ...(staff ? staff.commentators : [])];
 
   function toggle(id) {
     setSelected((prev) => (prev.includes(id) ? prev.filter((p) => p !== id) : prev.length >= 3 ? prev : [...prev, id]));
@@ -3879,6 +4041,20 @@ function PromoBuilderModal({ roster, onClose, onAdd }) {
           <button key={p} onClick={() => setPurpose(p)} className="rounded-md p-2 text-xs font-semibold" style={{ backgroundColor: purpose === p ? C.ink : C.canvasAlt, color: purpose === p ? C.gold : C.inkFaint }}>{p}</button>
         ))}
       </div>
+
+      {allStaff.length > 0 && (
+        <>
+          <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>HOSTED BY (OPTIONAL)</p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button onClick={() => setHostStaffId('')} className="px-3 py-1.5 rounded-full text-xs font-semibold" style={{ backgroundColor: hostStaffId === '' ? C.ink : C.canvasAlt, color: hostStaffId === '' ? C.gold : C.inkFaint }}>No Host</button>
+            {allStaff.map((s) => (
+              <button key={s.id} onClick={() => setHostStaffId(s.id)} className="px-3 py-1.5 rounded-full text-xs font-semibold" style={{ backgroundColor: hostStaffId === s.id ? C.gold : C.canvasAlt, color: hostStaffId === s.id ? C.ink : C.inkFaint }}>
+                {s.name} ({s.quality})
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>PARTICIPANTS ({selected.length}/3)</p>
       <div className="max-h-60 overflow-y-auto wgm-scrollbar space-y-1.5 mb-5">
@@ -3899,7 +4075,7 @@ function PromoBuilderModal({ roster, onClose, onAdd }) {
         })}
       </div>
 
-      <PrimaryButton full disabled={selected.length === 0} onClick={() => onAdd({ kind: 'promo', id: uid(), participantIds: selected, purpose })}>Add to Card</PrimaryButton>
+      <PrimaryButton full disabled={selected.length === 0} onClick={() => onAdd({ kind: 'promo', id: uid(), participantIds: selected, purpose, hostStaffId: hostStaffId || null })}>Add to Card</PrimaryButton>
     </Modal>
   );
 }
