@@ -148,6 +148,57 @@ const VENUE_TIERS = [
   { id: 'sports', name: 'Sports Arena', capacity: 12000, rent: 30000, minRep: 75 },
   { id: 'stadium', name: 'Stadium', capacity: 35000, rent: 90000, minRep: 92 },
 ];
+const ALL_VENUES = [
+  { id: 'gym', tierId: 'gym', name: 'High School Gym', capacity: 150, rent: 250, minRep: 0, crowdLean: null },
+  { id: 'gym_deathmatch', tierId: 'gym', name: 'Rusty Machine Shop', capacity: 150, rent: 213, minRep: 0, crowdLean: 'deathmatch' },
+  { id: 'gym_lucha', tierId: 'gym', name: 'Parish Community Hall', capacity: 150, rent: 250, minRep: 0, crowdLean: 'lucha' },
+  { id: 'legion', tierId: 'legion', name: 'Legion Hall', capacity: 350, rent: 600, minRep: 8, crowdLean: null },
+  { id: 'legion_strong_style', tierId: 'legion', name: 'Dojo Fight Center', capacity: 350, rent: 600, minRep: 8, crowdLean: 'strong_style' },
+  { id: 'legion_sports_entertainment', tierId: 'legion', name: 'Downtown Rec Center', capacity: 350, rent: 660, minRep: 8, crowdLean: 'sports_entertainment' },
+  { id: 'armory', tierId: 'armory', name: 'National Guard Armory', capacity: 800, rent: 1600, minRep: 20, crowdLean: null },
+  { id: 'armory_british', tierId: 'armory', name: "Working Men's Club", capacity: 800, rent: 1440, minRep: 20, crowdLean: 'british' },
+  { id: 'armory_deathmatch', tierId: 'armory', name: 'The Underground', capacity: 800, rent: 1280, minRep: 20, crowdLean: 'deathmatch' },
+  { id: 'community', tierId: 'community', name: 'Community Arena', capacity: 1800, rent: 4200, minRep: 35, crowdLean: null },
+  { id: 'community_lucha', tierId: 'community', name: 'Fiesta Arena', capacity: 1800, rent: 4200, minRep: 35, crowdLean: 'lucha' },
+  { id: 'community_strong_style', tierId: 'community', name: 'Budo Hall', capacity: 1800, rent: 4200, minRep: 35, crowdLean: 'strong_style' },
+  { id: 'midsize', tierId: 'midsize', name: 'Mid-Size Arena', capacity: 5000, rent: 12000, minRep: 55, crowdLean: null },
+  { id: 'midsize_sports_entertainment', tierId: 'midsize', name: 'Civic Spectacle Center', capacity: 5000, rent: 13800, minRep: 55, crowdLean: 'sports_entertainment' },
+  { id: 'midsize_deathmatch', tierId: 'midsize', name: 'Scrapyard Coliseum', capacity: 5000, rent: 10200, minRep: 55, crowdLean: 'deathmatch' },
+  { id: 'sports', tierId: 'sports', name: 'Sports Arena', capacity: 12000, rent: 30000, minRep: 75, crowdLean: null },
+  { id: 'sports_british', tierId: 'sports', name: "Grapplers' Cathedral", capacity: 12000, rent: 33000, minRep: 75, crowdLean: 'british' },
+  { id: 'sports_lucha', tierId: 'sports', name: 'Templo de Lucha', capacity: 12000, rent: 31500, minRep: 75, crowdLean: 'lucha' },
+  { id: 'stadium', tierId: 'stadium', name: 'Stadium', capacity: 35000, rent: 90000, minRep: 92, crowdLean: null },
+  { id: 'stadium_strong_style', tierId: 'stadium', name: 'National Budokan', capacity: 35000, rent: 99000, minRep: 92, crowdLean: 'strong_style' },
+  { id: 'stadium_sports_entertainment', tierId: 'stadium', name: 'Mega Dome', capacity: 35000, rent: 108000, minRep: 92, crowdLean: 'sports_entertainment' },
+];
+function regionalCompanyCount(company, rivals) {
+  return 1 + (rivals || []).filter((r) => r.region === company.region).length;
+}
+function venueVariantSlotsFor(company, rivals) {
+  const n = regionalCompanyCount(company, rivals);
+  if (n >= 8) return 3;
+  if (n >= 4) return 2;
+  return 1;
+}
+function unlockedVenuesFor(company, rivals) {
+  const slots = venueVariantSlotsFor(company, rivals);
+  const repUnlocked = ALL_VENUES.filter((v) => v.minRep <= company.reputation);
+  const byTier = {};
+  repUnlocked.forEach((v) => {
+    if (!byTier[v.tierId]) byTier[v.tierId] = [];
+    byTier[v.tierId].push(v);
+  });
+  const result = [];
+  VENUE_TIERS.forEach((t) => {
+    const list = byTier[t.id];
+    if (!list) return;
+    const neutral = list.find((v) => !v.crowdLean);
+    const leans = list.filter((v) => v.crowdLean);
+    if (neutral) result.push(neutral);
+    result.push(...leans.slice(0, Math.max(0, slots - 1)));
+  });
+  return result;
+}
 
 const MATCH_TYPES = [
   { id: 'singles', label: 'Singles Match', minP: 2, maxP: 2, beatsRange: [6, 9], riskMult: 1.0, weight: { strike: 1, grapple: 1, aerial: 0.8, submission: 0.8, power: 0.8 } },
@@ -324,6 +375,13 @@ const RING_ORIGINS = [
   { id: 'used', label: 'Bought Used', blurb: 'A retired indie promotion sold you their old ring for cheap.', cost: 1200, ringLevel: 2 },
   { id: 'new', label: 'Bought New', blurb: 'Brand new, built to spec. Costs real money, but it shows.', cost: 3500, ringLevel: 3 },
 ];
+const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+function ringConditionMult(condition) {
+  return { injuryMult: clamp(1.4 - condition / 130, 0.85, 1.4), qualityBonus: clamp((condition - 60) / 400, -0.15, 0.1) };
+}
+function suppliesMult(supplies) {
+  return clamp(0.55 + supplies / 155, 0.55, 1.15);
+}
 
 /* ---------- Concessions & merch catalogs (build your own menu) ---------- */
 const CONCESSION_ITEMS_CATALOG = [
@@ -369,10 +427,11 @@ function sellRateFor(item, price) {
 }
 function computeConcessionsRevenue(company, attendance) {
   let net = 0;
+  const mult = suppliesMult(company.supplies !== undefined ? company.supplies : 100);
   (company.concessionsMenu || []).forEach((entry) => {
     const item = CONCESSION_ITEMS_CATALOG.find((i) => i.id === entry.itemId);
     if (!item) return;
-    const qty = Math.round(attendance * sellRateFor(item, entry.price));
+    const qty = Math.round(attendance * sellRateFor(item, entry.price) * mult);
     net += qty * (Number(entry.price) - item.baseCost);
   });
   return Math.max(0, Math.round(net));
@@ -381,6 +440,7 @@ function computeMerchResult(company, roster, attendance) {
   let net = 0;
   const royalties = {};
   let tapesActive = false;
+  const mult = suppliesMult(company.supplies !== undefined ? company.supplies : 100);
   (company.merchMenu || []).forEach((entry) => {
     const item = MERCH_ITEMS_CATALOG.find((i) => i.id === entry.itemId);
     if (!item) return;
@@ -389,7 +449,7 @@ function computeMerchResult(company, roster, attendance) {
     const assigned = ids.map((id) => roster.find((r) => r.id === id)).filter((w) => w && w.popularity >= MERCH_MIN_POPULARITY);
     const avgPop = assigned.length ? average(assigned.map((w) => w.popularity)) : 0;
     const popMult = assigned.length ? 1 + avgPop / 150 : 1;
-    const qty = Math.round(attendance * sellRateFor(item, entry.price) * popMult);
+    const qty = Math.round(attendance * sellRateFor(item, entry.price) * popMult * mult);
     const grossProfit = qty * (Number(entry.price) - item.baseCost);
     let itemNet = grossProfit;
     if (assigned.length && grossProfit > 0) {
@@ -405,10 +465,11 @@ function computeMerchResult(company, roster, attendance) {
   });
   return { net: Math.max(0, Math.round(net)), royalties, tapesActive };
 }
-function weaponsEffectFor(matchTypeId, weaponsOwned) {
+function weaponsEffectFor(matchTypeId, weaponsOwned, supplies) {
   if (!WEAPONS_MATCH_TYPES.includes(matchTypeId) || !weaponsOwned || !weaponsOwned.length) return { qualityBonus: 0, injuryMult: 1 };
   const items = WEAPON_ITEMS_CATALOG.filter((w) => weaponsOwned.includes(w.id));
-  const qualityBonus = clamp(sum(items.map((i) => i.qualityBonus)), 0, 0.6);
+  const mult = suppliesMult(supplies !== undefined ? supplies : 100);
+  const qualityBonus = clamp(sum(items.map((i) => i.qualityBonus)) * mult, 0, 0.6);
   const injuryMult = clamp(1 + sum(items.map((i) => i.injuryMult - 1)), 1, 1.8);
   return { qualityBonus, injuryMult };
 }
@@ -1146,6 +1207,36 @@ function rivalPoachChance(rival) {
   if (rival.relationship === 'pact') return 0;
   return clamp(0.1 + rival.reputation / 500 + (rival.relationship === 'rival' ? 0.08 : rival.relationship === 'ally' ? -0.05 : 0), 0.02, 0.35);
 }
+function canActToday(company) {
+  return (company.weekDay || 1) <= WEEK_DAYS.length;
+}
+function tickOneDay(g) {
+  const company = { ...g.company, weekDay: Math.min(WEEK_DAYS.length + 1, (g.company.weekDay || 1) + 1) };
+  let freeAgents = g.freeAgents;
+  const news = [];
+
+  const unavailable = new Set(company.unavailableVenueIds || []);
+  const lockedVenueId = g.draftShow.venueId;
+  const availableNow = unlockedVenuesFor(company, g.rivals).filter((v) => v.id !== lockedVenueId && !unavailable.has(v.id));
+  if (availableNow.length > 1 && Math.random() < 0.14) {
+    const taken = pick(availableNow);
+    unavailable.add(taken.id);
+    news.push(`${taken.name} just got booked by another promotion this week.`);
+  }
+  company.unavailableVenueIds = Array.from(unavailable);
+
+  if (freeAgents.length && g.rivals.length) {
+    const rival = pick(g.rivals);
+    if (Math.random() < rivalPoachChance(rival) * 0.3) {
+      const target = pick(freeAgents);
+      freeAgents = freeAgents.filter((w) => w.id !== target.id);
+      news.push(`${rival.name} scooped up free agent ${target.name} while you weren't looking.`);
+    }
+  }
+
+  return { ...g, company, freeAgents, news: [...news.reverse(), ...g.news].slice(0, 30) };
+}
+
 const TERRITORY_PACT_COST = 2000;
 function acquisitionCostFor(rival) {
   let cost = 5000 + rival.reputation * 400;
@@ -1171,28 +1262,41 @@ const JOURNALIST_LEANS = [
 function generateJournalists(regionId) {
   return JOURNALIST_LEANS.map((lean) => ({ name: generateAdvisorName(regionId), leanId: lean.id, title: lean.title }));
 }
-function journalistTake(leanId, recap) {
+function journalistTake(leanId, recap, rivals) {
+  const sortedRivals = (rivals || []).slice().sort((a, b) => b.reputation - a.reputation);
+  const topRival = sortedRivals[0] || null;
+  const hotRival = (rivals || []).find((r) => r.momentum >= 2);
+  const decliningRival = (rivals || []).find((r) => r.momentum <= -2);
   switch (leanId) {
     case 'technical':
       if (recap.topMatch && recap.topMatch.stars >= 4) return `${recap.topMatch.label} was a clinic — ${recap.topMatch.stars}★ of exactly what this business should look like.`;
       if (recap.avgStars >= 3.5) return `Solid fundamentals across the board this month. A ${recap.avgStars.toFixed(1)}★ average speaks for itself.`;
       if (recap.shows === 0) return `Nothing to review this month. Can't grade a show that never happened.`;
       if (recap.avgStars < 2.5) return `The in-ring product needs work. A ${recap.avgStars.toFixed(1)}★ average won't win over the hardcore fans who actually watch the wrestling.`;
+      if (topRival) return `For my money, ${topRival.name} is putting on the more consistent product across the industry right now.`;
       return `A quiet month for the purists. Nothing that'll make a highlight reel, nothing that hurt either.`;
     case 'hardcore':
       if (recap.topMatch && recap.topMatch.stars >= 4.5) return `${recap.topMatch.label} was the kind of chaos I live for. ${recap.topMatch.stars}★, no notes.`;
       if (recap.titleChanges.length) return `Gold changed hands this month and the crowd ate it up. More of this, less standing around.`;
+      if (hotRival) return `${hotRival.name} is on an absolute tear lately. Somebody in this business better answer that.`;
       if (recap.shows === 0) return `A whole month with no shows? Fans forget you exist if you don't give them something.`;
       if (recap.shows <= 1) return `One show all month? Fans need chaos more often than that.`;
       return `Nothing broke, nothing bled. Forgettable month if you ask me.`;
     case 'rumors':
       if (recap.titleChanges.length) return `Word is ${recap.titleChanges[0].winner} winning the ${recap.titleChanges[0].titleName} wasn't universally popular backstage. Keep an eye on that locker room.`;
+      if (decliningRival) return `Hearing things are getting shaky over at ${decliningRival.name}. Wouldn't be shocked if some of their talent starts making calls.`;
       if (recap.powerRankings.length) return `${recap.powerRankings[0].name} is the hottest name in the building right now. Don't be shocked if a rival comes calling.`;
+      if (topRival && topRival.reputation >= 60) return `${topRival.name} is the promotion everybody in this business is talking about right now. Reputation like that doesn't happen by accident.`;
       if (recap.totalProfit < 0) return `Hearing the books were red this month. How long can that go on before something gives?`;
       return `Quiet on the rumor mill this month — which almost never means nothing's happening.`;
     default:
       return '';
   }
+}
+const MEDIA_INTERVIEW_MILESTONES = [25, 50, 75, 90];
+function mediaInterviewQuote(company, journalist, milestone) {
+  const repLabel = bossRepLabel(company.bossReputation !== undefined ? company.bossReputation : 50);
+  return `MEDIA SPOTLIGHT: ${journalist.name} of the press corps sat down with ${company.name} this week — reputation just crossed ${milestone}. "People are starting to take notice," ${journalist.name.split(' ')[0]} writes. Around the business, the boss is known as ${repLabel.toLowerCase()}.`;
 }
 function showLetterGrade(h) {
   const fillRatio = h.capacity ? clamp(h.attendance / h.capacity, 0, 1) : 0.5;
@@ -1214,7 +1318,7 @@ function letterGradeColor(grade) {
   if (grade.startsWith('C')) return C.goldSoft;
   return C.rope;
 }
-function generateMonthlyRecap(slice, roster, monthNum, year, journalists) {
+function generateMonthlyRecap(slice, roster, monthNum, year, journalists, rivals) {
   const shows = slice.length;
   const avgStars = shows ? average(slice.map((h) => h.avgStars)) : 0;
   const totalAttendance = sum(slice.map((h) => h.attendance));
@@ -1231,7 +1335,7 @@ function generateMonthlyRecap(slice, roster, monthNum, year, journalists) {
     titleChanges, powerRankings,
   };
   recap.grade = shows ? showLetterGrade({ attendance: totalAttendance, capacity: sum(slice.map((h) => h.capacity)), avgStars, netProfit: totalProfit }) : null;
-  recap.press = (journalists || []).map((j) => ({ name: j.name, title: j.title, take: journalistTake(j.leanId, recap) }));
+  recap.press = (journalists || []).map((j) => ({ name: j.name, title: j.title, take: journalistTake(j.leanId, recap, rivals) }));
   return recap;
 }
 
@@ -1243,13 +1347,14 @@ function simulateMatch(match, wrestlerLookup, tagTeams = [], upgrades = {}, feud
   const matchType = ALL_MATCH_TYPES.find((m) => m.id === match.typeId) || MATCH_TYPES[0];
   const ringTier = UPGRADES.ring.levels[(upgrades.ring || 1) - 1];
   const ringShapeBonus = upgrades.ringShapeBonus || 0;
-  const weaponsFx = weaponsEffectFor(matchType.id, upgrades.weaponsOwned);
+  const weaponsFx = weaponsEffectFor(matchType.id, upgrades.weaponsOwned, upgrades.supplies);
   const weaponsMatch = weaponsFx.qualityBonus > 0;
   const refQuality = upgrades.refereeQuality !== undefined ? upgrades.refereeQuality : 50;
   const refInjuryMult = clamp(1.25 - refQuality / 200, 0.75, 1.25);
   const refQualityBonus = clamp((refQuality - 50) / 250, -0.2, 0.2);
   const roadAgentQuality = upgrades.roadAgentQuality !== undefined ? upgrades.roadAgentQuality : 50;
   const roadAgentQualityBonus = clamp((roadAgentQuality - 50) / 200, -0.25, 0.25);
+  const ringCondFx = ringConditionMult(upgrades.ringCondition !== undefined ? upgrades.ringCondition : 100);
   const beatsCount = randInt(matchType.beatsRange[0], matchType.beatsRange[1]);
   let momentum = 0;
   let qualityPoints = 0;
@@ -1298,6 +1403,7 @@ function simulateMatch(match, wrestlerLookup, tagTeams = [], upgrades = {}, feud
       injuryMult *= ringTier.injuryMult;
       injuryMult *= weaponsFx.injuryMult;
       injuryMult *= refInjuryMult;
+      injuryMult *= ringCondFx.injuryMult;
       const injuryChance = spot.riskBase * matchType.riskMult * (1 - performer.condition / 150) * injuryMult;
       if (Math.random() < injuryChance) {
         const sev = pickInjurySeverity();
@@ -1319,7 +1425,7 @@ function simulateMatch(match, wrestlerLookup, tagTeams = [], upgrades = {}, feud
   });
   if (relevantFeuds.length) beatLog.push(`The bad blood between ${relevantFeuds.map((f) => `${f.aName} and ${f.bName}`).join(', ')} spills into this one.`);
 
-  qualityPoints += ringTier.qualityBonus + ringShapeBonus + refQualityBonus + roadAgentQualityBonus;
+  qualityPoints += ringTier.qualityBonus + ringShapeBonus + refQualityBonus + roadAgentQualityBonus + ringCondFx.qualityBonus;
   if (weaponsMatch) {
     qualityPoints += weaponsFx.qualityBonus;
     beatLog.push('Weapons come into play and the crowd loses it.');
@@ -1350,7 +1456,7 @@ function computePromoPop(promo, wrestlerLookup, staffLookup) {
 }
 
 function computeFillFactors(draftShow, game) {
-  const venue = VENUE_TIERS.find((v) => v.id === draftShow.venueId) || VENUE_TIERS[0];
+  const venue = ALL_VENUES.find((v) => v.id === draftShow.venueId) || ALL_VENUES[0];
   const rosterPopAvg = average(game.roster.map((w) => w.popularity)) || 10;
   const staffAll = [...game.staff.announcers, ...game.staff.commentators];
   const avgStaffQuality = average(staffAll.map((s) => staffEffectiveQuality(s))) || 40;
@@ -1362,7 +1468,8 @@ function computeFillFactors(draftShow, game) {
   const productionBonus = currentTier(game.company, 'production').fillBonus;
   const tvNetwork = tvNetworkFor(game.company);
   const tvBonus = tvNetwork ? tvNetwork.fillBonus : 0;
-  const fillRate = clamp(0.25 + repFactor + popFactor + marketingFactor + staffFactor + productionBonus + tvBonus - priceFactor, 0.08, 0.99);
+  const crowdMatchFactor = !venue.crowdLean ? 0 : venue.crowdLean === game.company.style ? 0.06 : -0.08;
+  const fillRate = clamp(0.25 + repFactor + popFactor + marketingFactor + staffFactor + productionBonus + tvBonus + crowdMatchFactor - priceFactor, 0.08, 0.99);
   const attendance = Math.round(venue.capacity * fillRate);
   const effectiveRent = Math.round(venue.rent * (1 - currentTier(game.company, 'transport').rentDiscount));
   const payroll = sum(game.roster.map((w) => w.salary)) + sum(staffAll.map((s) => s.salary));
@@ -1397,8 +1504,10 @@ function simulateShow(draftShow, game) {
     ring: game.company.upgrades.ring,
     ringShapeBonus: ringShapeBonusFor(game.company),
     weaponsOwned: game.company.weaponsOwned || [],
+    supplies: game.company.supplies,
     refereeQuality,
     roadAgentQuality,
+    ringCondition: game.company.ringCondition,
   };
   const matchResults = draftShow.card.filter((s) => s.kind === 'match').map((m) => ({ ...m, result: simulateMatch(m, wrestlerLookup, game.tagTeams, matchUpgrades, game.feuds) }));
   const promoResults = draftShow.card.filter((s) => s.kind === 'promo').map((p) => ({ ...p, pop: computePromoPop(p, wrestlerLookup, staffLookup) }));
@@ -1415,10 +1524,16 @@ function simulateShow(draftShow, game) {
 
   const avgStars = matchResults.length ? average(matchResults.map((m) => m.result.finalStars)) : 2.5;
   const avgPromoPop = promoResults.length ? average(promoResults.map((p) => p.pop)) : 50;
-  let repDelta = clamp(Math.round((avgStars - 2.75) * 3 + (fillRate - 0.5) * 8 + (avgPromoPop - 50) / 20), -8, 14);
+  let repDelta = clamp(Math.round((avgStars - 2.25) * 3 + (fillRate - 0.35) * 8 + (avgPromoPop - 50) / 20), -8, 14);
   if (merchResult.tapesActive) repDelta = clamp(repDelta + 1, -8, 15);
+  let crowdVerdict = null;
+  if (venue.crowdLean && venue.crowdLean !== game.company.style) {
+    if (avgStars >= 3.25) { repDelta = clamp(repDelta + 4, -8, 18); crowdVerdict = 'won_over'; }
+    else if (avgStars < 2.25) { repDelta = clamp(repDelta - 3, -12, 18); crowdVerdict = 'bombed'; }
+    else crowdVerdict = 'flat';
+  }
 
-  return { venue, matchResults, promoResults, attendance, ticketRevenue, concessionsRevenue, merchRevenue, tvRevenue, merchRoyalties: merchResult.royalties, revenue, expenses, payroll, netProfit, avgStars, avgPromoPop, repDelta, fillRate };
+  return { venue, matchResults, promoResults, attendance, ticketRevenue, concessionsRevenue, merchRevenue, tvRevenue, merchRoyalties: merchResult.royalties, revenue, expenses, payroll, netProfit, avgStars, avgPromoPop, repDelta, fillRate, crowdVerdict };
 }
 
 /* ============================================================
@@ -1469,6 +1584,11 @@ function createNewGame(opts) {
       matchResearch: { unlockedTypes: [], inProgress: null },
       advisors: generateAdvisors(region),
       journalists: generateJournalists(region),
+      mediaInterviewMilestones: [],
+      weekDay: 1,
+      unavailableVenueIds: [],
+      ringCondition: 100,
+      supplies: 100,
       acquisitionsCount: 0,
     },
     roster: startingRoster,
@@ -1518,6 +1638,11 @@ function normalizeGame(loaded) {
       matchResearch: loadedCompany.matchResearch || { unlockedTypes: [], inProgress: null },
       advisors: loadedCompany.advisors || generateAdvisors(loadedCompany.region || 'usa'),
       journalists: loadedCompany.journalists || generateJournalists(loadedCompany.region || 'usa'),
+      mediaInterviewMilestones: loadedCompany.mediaInterviewMilestones || [],
+      weekDay: loadedCompany.weekDay || 1,
+      unavailableVenueIds: loadedCompany.unavailableVenueIds || [],
+      ringCondition: loadedCompany.ringCondition !== undefined ? loadedCompany.ringCondition : 100,
+      supplies: loadedCompany.supplies !== undefined ? loadedCompany.supplies : 100,
       acquisitionsCount: loadedCompany.acquisitionsCount || 0,
       background: loadedCompany.background || 'family',
       bossReputation: loadedCompany.bossReputation !== undefined ? loadedCompany.bossReputation : 50,
@@ -1777,41 +1902,44 @@ export default function WrestlingGM() {
   }
   function renewContract(id) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const w = g.roster.find((r) => r.id === id);
       if (!w) return g;
       let bonus = Math.round(w.salary);
       if (hasTrait(w, 'difficult')) bonus = Math.round(bonus * 1.3);
       if (hasTrait(w, 'company_man')) bonus = Math.round(bonus * 0.8);
       if (g.company.funds < bonus) { showToast('Not enough funds to renew.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus, bossReputation: bumpBossRep(g, 1) },
         roster: g.roster.map((r) => (r.id === id ? { ...r, contractWeeksLeft: randInt(12, 30), salary: Math.round(r.salary * (1 + randInt(5, 20) / 100)) } : r)),
-      };
+      });
     });
     showToast('Contract renewed.');
   }
   function grantAmbitionRequest(id) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const w = g.roster.find((r) => r.id === id);
       if (!w || !w.ambition || !w.ambition.pendingRequest) return g;
       const cost = 1500;
       if (g.company.funds < cost) { showToast('Not enough funds to address this.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - cost, bossReputation: bumpBossRep(g, 2) },
         roster: g.roster.map((r) => (r.id === id ? { ...r, ambition: { ...r.ambition, satisfaction: clamp(r.ambition.satisfaction + 35, 0, 100), status: 'content', pendingRequest: null } } : r)),
-      };
+      });
     });
     showToast('Request addressed.');
   }
   function sendToWellnessProgram(id) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const w = g.roster.find((r) => r.id === id);
       if (!w) return g;
       const cost = 3000;
       if (g.company.funds < cost) { showToast('Not enough funds to cover this.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - cost, bossReputation: bumpBossRep(g, 3) },
         roster: g.roster.map((r) => (r.id === id ? {
@@ -1819,19 +1947,20 @@ export default function WrestlingGM() {
           wellness: { status: 'in_program', weeksInStatus: 0 },
           morale: clamp(r.morale + 15, 0, 100),
         } : r)),
-      };
+      });
     });
     showToast(`${game.roster.find((r) => r.id === id)?.name || 'Wrestler'} sent to get support.`);
   }
   function giveStaffRaise(role, id) {
     const key = staffRoleKey(role);
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const s = g.staff[key].find((x) => x.id === id);
       if (!s) return g;
       const cost = Math.round(s.salary * 3);
       if (g.company.funds < cost) { showToast('Not enough funds for a raise.'); return g; }
       const fulfillsAmbition = s.ambition && s.ambition.type === 'raise';
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - cost, bossReputation: bumpBossRep(g, 1) },
         staff: {
@@ -1843,12 +1972,13 @@ export default function WrestlingGM() {
             ambition: fulfillsAmbition ? { ...assignStaffAmbition(), satisfaction: 80 } : { ...x.ambition, satisfaction: clamp(x.ambition.satisfaction + 20, 0, 100), status: x.ambition.satisfaction + 20 >= 40 ? 'content' : x.ambition.status, pendingRequest: x.ambition.satisfaction + 20 >= 40 ? null : x.ambition.pendingRequest },
           } : x)),
         },
-      };
+      });
     });
     showToast('Gave a raise.');
   }
   function signFreeAgent(id) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week to sign anyone — run the show or wait for next week.'); return g; }
       const w = g.freeAgents.find((f) => f.id === id);
       if (!w) return g;
       let bonus = w.salary * 2 * (w.signingMult || 1);
@@ -1865,13 +1995,13 @@ export default function WrestlingGM() {
         const other = pick(g.roster);
         relationships = [...relationships, createRelationshipObject(w.id, w.name, other.id, other.name, randomPreexistingRelType(), g.company.week, g.company.year)];
       }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
         roster: [...g.roster, { ...w, contractWeeksLeft: randInt(12, 26), storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: w.discoveredVia ? `Discovered via ${w.discoveredVia} and signed with ${g.company.name}.` : `Signed with ${g.company.name}.` }].slice(-20) }],
         freeAgents: g.freeAgents.filter((f) => f.id !== id),
         relationships,
-      };
+      });
     });
     showToast('Wrestler signed.');
   }
@@ -1879,15 +2009,16 @@ export default function WrestlingGM() {
     const method = TALENT_SEARCH_METHODS.find((m) => m.id === methodId);
     if (!method) return;
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week to search — run the show or wait for next week.'); return g; }
       if (g.company.funds < method.cost) { showToast('Not enough funds for this.'); return g; }
       if (g.freeAgents.length >= 30) { showToast('Free agent pool is full — sign a few before searching more.'); return g; }
       const found = Math.random() < method.findChance;
       if (!found) {
-        return {
+        return tickOneDay({
           ...g,
           company: { ...g.company, funds: g.company.funds - method.cost },
           news: [`${method.label} turned up nothing this time.`, ...g.news].slice(0, 30),
-        };
+        });
       }
       const candidates = Array.from({ length: method.count }, () => {
         const tier = weightedTierPick(method.tierWeights);
@@ -1895,12 +2026,12 @@ export default function WrestlingGM() {
         if (method.statBias) w.stats[method.statBias] = clamp(w.stats[method.statBias] + 15, 5, 99);
         return { ...w, signingMult: method.signingMult, discoveredVia: method.label };
       });
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - method.cost },
         freeAgents: [...g.freeAgents, ...candidates],
         news: [`${method.label} turned up ${candidates.map((c) => c.name).join(' and ')}.`, ...g.news].slice(0, 30),
-      };
+      });
     });
     showToast('Search complete.');
   }
@@ -1908,15 +2039,16 @@ export default function WrestlingGM() {
   /* ---------- Title actions ---------- */
   function createTitle(name, division, isTag, holderIds) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       if (g.company.funds < TITLE_CREATION_COST) { showToast(`Need ${money(TITLE_CREATION_COST)} to commission a title.`); return g; }
       const holderNames = holderIds.map((id) => (g.roster.find((r) => r.id === id) || {}).name || '???');
       const title = createTitleObject(name, division, isTag, holderIds, holderNames, g.company.week, g.company.year);
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - TITLE_CREATION_COST },
         titles: [...g.titles, title],
         news: [`The ${name} has been introduced${holderIds.length ? ` — ${holderNames.join(' & ')} crowned inaugural champion${holderIds.length > 1 ? 's' : ''}.` : ', currently vacant.'}`, ...g.news].slice(0, 30),
-      };
+      });
     });
     setTitleBuilderOpen(false);
     showToast('Title created.');
@@ -1936,7 +2068,10 @@ export default function WrestlingGM() {
 
   /* ---------- Tag team & stable actions ---------- */
   function createTeam(name, memberIds) {
-    updateGame((g) => ({ ...g, tagTeams: [...g.tagTeams, createTagTeamObject(name, memberIds, g.company.week, g.company.year)] }));
+    updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
+      return tickOneDay({ ...g, tagTeams: [...g.tagTeams, createTagTeamObject(name, memberIds, g.company.week, g.company.year)] });
+    });
     setTeamBuilderOpen(false);
     showToast('Tag team formed.');
   }
@@ -1946,8 +2081,9 @@ export default function WrestlingGM() {
   }
   function createStable(name, leaderId, memberIds) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const allMembers = memberIds.includes(leaderId) ? memberIds : [leaderId, ...memberIds];
-      return { ...g, stables: [...g.stables, createStableObject(name, leaderId, allMembers, g.company.week, g.company.year)] };
+      return tickOneDay({ ...g, stables: [...g.stables, createStableObject(name, leaderId, allMembers, g.company.week, g.company.year)] });
     });
     setStableBuilderOpen(false);
     showToast('Stable formed.');
@@ -1964,19 +2100,20 @@ export default function WrestlingGM() {
   /* ---------- Feud actions ---------- */
   function createFeud(aId, bId, aPartnerId, bPartnerId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const a = g.roster.find((r) => r.id === aId);
       const b = g.roster.find((r) => r.id === bId);
       if (!a || !b) return g;
       const aPartner = aPartnerId ? g.roster.find((r) => r.id === aPartnerId) : null;
       const bPartner = bPartnerId ? g.roster.find((r) => r.id === bPartnerId) : null;
-      return {
+      return tickOneDay({
         ...g,
         feuds: [...g.feuds, createFeudObject(
           a.id, a.name, b.id, b.name, g.company.week, g.company.year,
           aPartner ? aPartner.id : null, aPartner ? aPartner.name : null,
           bPartner ? bPartner.id : null, bPartner ? bPartner.name : null,
         )],
-      };
+      });
     });
     setFeudBuilderOpen(false);
     showToast('Feud started.');
@@ -1990,10 +2127,11 @@ export default function WrestlingGM() {
   /* ---------- Relationship actions ---------- */
   function createRelationship(aId, bId, type) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const a = g.roster.find((r) => r.id === aId);
       const b = g.roster.find((r) => r.id === bId);
       if (!a || !b) return g;
-      return { ...g, relationships: [...g.relationships, createRelationshipObject(a.id, a.name, b.id, b.name, type, g.company.week, g.company.year)] };
+      return tickOneDay({ ...g, relationships: [...g.relationships, createRelationshipObject(a.id, a.name, b.id, b.name, type, g.company.week, g.company.year)] });
     });
     setRelationshipBuilderOpen(false);
     showToast('Relationship declared.');
@@ -2006,15 +2144,16 @@ export default function WrestlingGM() {
   /* ---------- TV deal actions ---------- */
   function signTVDeal(networkId, timeSlotId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       if (g.company.tvDeal) { showToast('Already under a TV deal.'); return g; }
       const network = TV_NETWORKS.find((n) => n.id === networkId);
       if (!network || g.company.reputation < network.minRep) return g;
       const slot = network.timeSlots.find((s) => s.id === timeSlotId) || network.timeSlots[0];
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, tvDeal: { networkId, weeksRemaining: network.weeks, totalWeeks: network.weeks, strikes: 0, signedWeek: g.company.week, signedYear: g.company.year, timeSlotId: slot.id, timeSlotLabel: slot.label, timeSlotHours: slot.hours } },
         news: [`Signed a TV deal with ${network.name} — airing ${slot.label}!`, ...g.news].slice(0, 30),
-      };
+      });
     });
     showToast('TV deal signed.');
   }
@@ -2025,15 +2164,16 @@ export default function WrestlingGM() {
   }
   function signTerritoryPact(rivalId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const rival = g.rivals.find((r) => r.id === rivalId);
       if (!rival || rival.relationship === 'pact') return g;
       if (g.company.funds < TERRITORY_PACT_COST) { showToast('Not enough funds for a pact.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - TERRITORY_PACT_COST, bossReputation: bumpBossRep(g, 2) },
         rivals: g.rivals.map((r) => (r.id === rivalId ? { ...r, relationship: 'pact' } : r)),
         news: [`Signed a territory pact with ${rival.name} — mutual respect, no poaching.`, ...g.news].slice(0, 30),
-      };
+      });
     });
     showToast('Territory pact signed.');
   }
@@ -2052,6 +2192,7 @@ export default function WrestlingGM() {
   }
   function acquireRival(rivalId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const rival = g.rivals.find((r) => r.id === rivalId);
       if (!rival) return g;
       if (rival.relationship === 'pact') { showToast('Break the pact first.'); return g; }
@@ -2059,13 +2200,13 @@ export default function WrestlingGM() {
       if (g.company.funds < cost) { showToast('Not enough funds for this acquisition.'); return g; }
       const newTalent = Array.from({ length: randInt(2, 4) }, () => generateWrestler(pick(['Rookie', 'Mid-Card', 'Mid-Card', 'Star']), rival.region, rival.style));
       const repGain = Math.round(rival.reputation / 5);
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - cost, reputation: clamp(g.company.reputation + repGain, 0, 100), acquisitionsCount: (g.company.acquisitionsCount || 0) + 1, bossReputation: bumpBossRep(g, -2) },
         rivals: g.rivals.filter((r) => r.id !== rivalId),
         freeAgents: [...g.freeAgents, ...newTalent],
         news: [`You've acquired ${rival.name}! Their roster hits the open market, and your company's influence grows.`, ...g.news].slice(0, 30),
-      };
+      });
     });
     showToast('Promotion acquired.');
   }
@@ -2073,16 +2214,17 @@ export default function WrestlingGM() {
   /* ---------- Upgrade actions ---------- */
   function purchaseUpgrade(key) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const currentLevel = upgradeLevel(g.company, key);
       const def = UPGRADES[key];
       if (currentLevel >= def.levels.length) { showToast('Already at max level.'); return g; }
       const nextTier = def.levels[currentLevel];
       if (g.company.funds < nextTier.cost) { showToast('Not enough funds for this upgrade.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - nextTier.cost, upgrades: { ...g.company.upgrades, [key]: currentLevel + 1 } },
         news: [`Upgraded ${def.label} to "${nextTier.name}."`, ...g.news].slice(0, 30),
-      };
+      });
     });
     showToast('Upgrade purchased.');
   }
@@ -2090,14 +2232,15 @@ export default function WrestlingGM() {
   /* ---------- Ring shape ---------- */
   function purchaseRingShape(id) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const shape = RING_SHAPES.find((s) => s.id === id);
       if (!shape || g.company.ringShapesOwned.includes(id)) return g;
       if (g.company.funds < shape.cost) { showToast('Not enough funds for this ring.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - shape.cost, ringShapesOwned: [...g.company.ringShapesOwned, id], ringShape: id },
         news: [`Commissioned a new ${shape.name} for the promotion.`, ...g.news].slice(0, 30),
-      };
+      });
     });
     showToast('Ring acquired and equipped.');
   }
@@ -2108,13 +2251,14 @@ export default function WrestlingGM() {
   /* ---------- Concessions ---------- */
   function addConcessionItem(itemId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const item = CONCESSION_ITEMS_CATALOG.find((i) => i.id === itemId);
       if (!item || g.company.concessionsMenu.some((e) => e.itemId === itemId)) return g;
       if (g.company.funds < item.unlockCost) { showToast('Not enough funds.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - item.unlockCost, concessionsMenu: [...g.company.concessionsMenu, { itemId, price: item.suggestedPrice }] },
-      };
+      });
     });
     showToast('Added to concessions menu.');
   }
@@ -2128,13 +2272,14 @@ export default function WrestlingGM() {
   /* ---------- Merchandise ---------- */
   function addMerchItem(itemId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const item = MERCH_ITEMS_CATALOG.find((i) => i.id === itemId);
       if (!item || g.company.merchMenu.some((e) => e.itemId === itemId)) return g;
       if (g.company.funds < item.unlockCost) { showToast('Not enough funds.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - item.unlockCost, merchMenu: [...g.company.merchMenu, { itemId, price: item.suggestedPrice, wrestlerIds: [] }] },
-      };
+      });
     });
     showToast('Added to merch menu.');
   }
@@ -2166,10 +2311,11 @@ export default function WrestlingGM() {
   /* ---------- Weapons shopping ---------- */
   function purchaseWeaponItem(itemId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const item = WEAPON_ITEMS_CATALOG.find((i) => i.id === itemId);
       if (!item || g.company.weaponsOwned.includes(itemId)) return g;
       if (g.company.funds < item.cost) { showToast('Not enough funds.'); return g; }
-      return { ...g, company: { ...g.company, funds: g.company.funds - item.cost, weaponsOwned: [...g.company.weaponsOwned, itemId] } };
+      return tickOneDay({ ...g, company: { ...g.company, funds: g.company.funds - item.cost, weaponsOwned: [...g.company.weaponsOwned, itemId] } });
     });
     showToast('Added to the weapons stash.');
   }
@@ -2177,13 +2323,14 @@ export default function WrestlingGM() {
   /* ---------- Match type research ---------- */
   function startMatchResearch(typeId) {
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       if (g.company.matchResearch.inProgress) { showToast('Already researching a match type.'); return g; }
       const def = RESEARCHABLE_MATCH_TYPES.find((t) => t.id === typeId);
       if (!def || g.company.matchResearch.unlockedTypes.includes(typeId)) return g;
       if (g.company.reputation < def.minRep) { showToast('Reputation too low for this research.'); return g; }
       if (def.requiresWeapons && !def.requiresWeapons.every((w) => g.company.weaponsOwned.includes(w))) { showToast('Missing required weapons for this match type.'); return g; }
       if (g.company.funds < def.researchCost) { showToast('Not enough funds to start research.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: {
           ...g.company,
@@ -2191,7 +2338,7 @@ export default function WrestlingGM() {
           matchResearch: { ...g.company.matchResearch, inProgress: { typeId, weeksRemaining: def.researchWeeks, totalWeeks: def.researchWeeks } },
         },
         news: [`Research begins on the ${def.label}.`, ...g.news].slice(0, 30),
-      };
+      });
     });
     showToast('Research started.');
   }
@@ -2200,23 +2347,59 @@ export default function WrestlingGM() {
   function hireStaff(role, id) {
     const key = staffRoleKey(role);
     updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week to hire — run the show or wait for next week.'); return g; }
       if (g.staff[key].length >= 3) { showToast(`You already have 3 ${role.toLowerCase()}s.`); return g; }
       const candidate = g.staffPool[key].find((s) => s.id === id);
       if (!candidate) return g;
       const bonus = Math.round(candidate.salary * 1.5);
       if (g.company.funds < bonus) { showToast('Not enough funds to hire.'); return g; }
-      return {
+      return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
         staff: { ...g.staff, [key]: [...g.staff[key], candidate] },
         staffPool: { ...g.staffPool, [key]: [...g.staffPool[key].filter((s) => s.id !== id), generateStaff(role)] },
-      };
+      });
     });
   }
   function fireStaff(role, id) {
     const key = staffRoleKey(role);
     updateGame((g) => ({ ...g, company: { ...g.company, bossReputation: bumpBossRep(g, -1) }, staff: { ...g.staff, [key]: g.staff[key].filter((s) => s.id !== id) } }));
     showToast(`${role} let go.`);
+  }
+  function repairRing() {
+    updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
+      const deficit = 100 - (g.company.ringCondition !== undefined ? g.company.ringCondition : 100);
+      if (deficit <= 0) { showToast('The ring is already in top shape.'); return g; }
+      const cost = Math.round(deficit * 45);
+      if (g.company.funds < cost) { showToast('Not enough funds to repair the ring.'); return g; }
+      return tickOneDay({ ...g, company: { ...g.company, funds: g.company.funds - cost, ringCondition: 100 } });
+    });
+    showToast('Ring repaired.');
+  }
+  function restockSupplies() {
+    updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
+      const deficit = 100 - (g.company.supplies !== undefined ? g.company.supplies : 100);
+      if (deficit <= 0) { showToast('Already fully stocked.'); return g; }
+      const cost = Math.round(deficit * 20);
+      if (g.company.funds < cost) { showToast('Not enough funds to restock.'); return g; }
+      return tickOneDay({ ...g, company: { ...g.company, funds: g.company.funds - cost, supplies: 100 } });
+    });
+    showToast('Restocked.');
+  }
+  function skipDay() {
+    updateGame((g) => {
+      if (!canActToday(g.company)) return g;
+      return tickOneDay(g);
+    });
+  }
+  function skipToShowDay() {
+    updateGame((g) => {
+      let next = g;
+      while (canActToday(next.company)) next = tickOneDay(next);
+      return next;
+    });
   }
 
   /* ---------- Draft show actions ---------- */
@@ -2636,19 +2819,43 @@ export default function WrestlingGM() {
       const sliceStart = game.company.week - 3;
       const recapSlice = [historyEntry, ...game.history].filter((h) => h.year === game.company.year && h.week >= sliceStart && h.week <= game.company.week);
       const monthNum = Math.ceil(game.company.week / 4);
-      const recap = generateMonthlyRecap(recapSlice, stillRoster, monthNum, game.company.year, game.company.journalists);
+      const recap = generateMonthlyRecap(recapSlice, stillRoster, monthNum, game.company.year, game.company.journalists, nextRivalsWithSignings);
       nextMediaRecaps = [recap, ...game.mediaRecaps].slice(0, 24);
       newsEntries.push(`Wrestling media has published its Month ${monthNum} recap.`);
     }
+
+    const nextReputation = clamp(Math.round(game.company.reputation + result.repDelta + stableRepBonus + feudRepBonus - wellnessRepPenalty + rivalRepTrickle), 0, 100);
+    const priorMilestones = game.company.mediaInterviewMilestones || [];
+    const crossedMilestone = MEDIA_INTERVIEW_MILESTONES.find((m) => game.company.reputation < m && nextReputation >= m && !priorMilestones.includes(m));
+    let nextMilestones = priorMilestones;
+    if (crossedMilestone) {
+      nextMilestones = [...priorMilestones, crossedMilestone];
+      const journalist = game.company.journalists && game.company.journalists.length ? pick(game.company.journalists) : null;
+      if (journalist) newsEntries.push(mediaInterviewQuote(game.company, journalist, crossedMilestone));
+    }
+
+    const matchesOnCard = draftShow.card.filter((s) => s.kind === 'match').length;
+    const hardcoreMatchesOnCard = draftShow.card.filter((s) => s.kind === 'match' && WEAPONS_MATCH_TYPES.includes(s.typeId)).length;
+    const ringWear = 6 + matchesOnCard * 2 + hardcoreMatchesOnCard * 3;
+    const nextRingCondition = clamp((game.company.ringCondition !== undefined ? game.company.ringCondition : 100) - ringWear, 0, 100);
+    const suppliesUsed = 5 + Math.round(result.attendance / 50);
+    const nextSupplies = clamp((game.company.supplies !== undefined ? game.company.supplies : 100) - suppliesUsed, 0, 100);
+    if (nextRingCondition <= 25) newsEntries.push('The ring is showing serious wear — worth repairing before it becomes a safety issue.');
+    if (nextSupplies <= 25) newsEntries.push('Concessions, merch, and weapons stock are running low — time to restock.');
 
     const nextGame = {
       ...game,
       company: {
         ...game.company,
         funds: game.company.funds + result.netProfit,
-        reputation: clamp(Math.round(game.company.reputation + result.repDelta + stableRepBonus + feudRepBonus - wellnessRepPenalty + rivalRepTrickle), 0, 100),
+        reputation: nextReputation,
+        mediaInterviewMilestones: nextMilestones,
         bossReputation: clamp((game.company.bossReputation !== undefined ? game.company.bossReputation : 50) + bossRepFromDepartures, 0, 100),
         week: nextWeek, year: nextYear,
+        weekDay: 1,
+        unavailableVenueIds: [],
+        ringCondition: nextRingCondition,
+        supplies: nextSupplies,
         tvDeal,
         matchResearch,
       },
@@ -2877,8 +3084,8 @@ export default function WrestlingGM() {
   const { company, roster, freeAgents, staff, staffPool, titles, tagTeams, stables, feuds, relationships, rivals, history, news, draftShow } = game;
   const healthyRoster = roster.filter((w) => !w.injury && !(w.ambition && w.ambition.status === 'holdout') && !(w.wellness && w.wellness.status === 'in_program'));
   const estimate = estimateShow(draftShow, game);
-  const draftVenue = VENUE_TIERS.find((v) => v.id === draftShow.venueId);
-  const unlocked = VENUE_TIERS.filter((v) => v.minRep <= company.reputation);
+  const draftVenue = ALL_VENUES.find((v) => v.id === draftShow.venueId) || ALL_VENUES[0];
+  const unlocked = unlockedVenuesFor(company, rivals);
   const nextVenue = nextLockedVenue(company.reputation);
 
   const TABS = [
@@ -2973,6 +3180,7 @@ export default function WrestlingGM() {
             onUpdateDraft={updateDraft} onOpenMatchBuilder={() => setMatchBuilderOpen(true)}
             onOpenPromoBuilder={() => setPromoBuilderOpen(true)} onRemove={removeCardItem} onMove={moveCardItem}
             onRun={runShow}
+            onRepairRing={repairRing} onRestockSupplies={restockSupplies} onSkipDay={skipDay} onSkipToShowDay={skipToShowDay}
           />
         )}
         {tab === 'history' && <HistoryTab history={history} />}
@@ -3991,7 +4199,7 @@ function StaffRow({ s, role, funds, onFire, onRaise }) {
 /* ============================================================
    BOOK SHOW TAB
    ============================================================ */
-function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, company, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onRun }) {
+function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, company, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onRun, onRepairRing, onRestockSupplies, onSkipDay, onSkipToShowDay }) {
   const [venueEditorOpen, setVenueEditorOpen] = useState(false);
   const wrestlerName = (id) => (roster.find((r) => r.id === id) || {}).name || '???';
   const wrestlerBilling = (id) => {
@@ -4000,8 +4208,59 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
     return { name: w.name, sub: `${w.hometown || ''}${w.hometown && w.weight ? ' · ' : ''}${w.weight ? `${w.weight} lbs` : ''}` };
   };
   const marketingTier = MARKETING_TIERS.find((t) => t.cost === draftShow.marketingBudget) || MARKETING_TIERS[0];
+  const weekDay = company.weekDay || 1;
+  const canAct = weekDay <= WEEK_DAYS.length;
+  const dayLabel = weekDay <= WEEK_DAYS.length ? WEEK_DAYS[weekDay - 1] : 'Show Day';
+  const ringCondition = company.ringCondition !== undefined ? company.ringCondition : 100;
+  const supplies = company.supplies !== undefined ? company.supplies : 100;
+  const ringRepairCost = Math.round((100 - ringCondition) * 45);
+  const restockCost = Math.round((100 - supplies) * 20);
+  const availableVenues = unlocked.filter((v) => v.id === draftShow.venueId || !(company.unavailableVenueIds || []).includes(v.id));
   return (
     <div className="space-y-4">
+      <div className="rounded-lg p-3" style={{ backgroundColor: C.ink }}>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-1.5">
+            <Calendar size={14} color={C.gold} />
+            <p className="wgm-display text-base" style={{ color: C.cream }}>{dayLabel}</p>
+          </div>
+          <p className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.55)' }}>{canAct ? `DAY ${weekDay} OF ${WEEK_DAYS.length}` : 'OUT OF DAYS — RUN THE SHOW'}</p>
+        </div>
+        <div className="flex gap-1 mb-3">
+          {WEEK_DAYS.map((d, i) => (
+            <div key={d} className="flex-1 h-1.5 rounded-full" style={{ backgroundColor: i < weekDay - 1 ? C.gold : i === weekDay - 1 && canAct ? 'rgba(196,146,46,0.5)' : 'rgba(246,240,225,0.15)' }} />
+          ))}
+        </div>
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.55)' }}>RING</span>
+              <span className="wgm-mono text-[9px]" style={{ color: ringCondition < 40 ? C.rope : C.cream }}>{Math.round(ringCondition)}%</span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(246,240,225,0.15)' }}>
+              <div className="h-full rounded-full" style={{ width: `${ringCondition}%`, backgroundColor: ringCondition < 40 ? C.rope : C.gold }} />
+            </div>
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.55)' }}>SUPPLIES</span>
+              <span className="wgm-mono text-[9px]" style={{ color: supplies < 30 ? C.rope : C.cream }}>{Math.round(supplies)}%</span>
+            </div>
+            <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: 'rgba(246,240,225,0.15)' }}>
+              <div className="h-full rounded-full" style={{ width: `${supplies}%`, backgroundColor: supplies < 30 ? C.rope : C.gold }} />
+            </div>
+          </div>
+        </div>
+        <div className="flex gap-2 mb-2">
+          <GhostButton onClick={onRepairRing} disabled={!canAct || ringCondition >= 100 || funds < ringRepairCost}>Repair Ring {ringCondition < 100 ? `(${money(ringRepairCost)})` : ''}</GhostButton>
+          <GhostButton onClick={onRestockSupplies} disabled={!canAct || supplies >= 100 || funds < restockCost}>Restock {supplies < 100 ? `(${money(restockCost)})` : ''}</GhostButton>
+        </div>
+        <div className="flex gap-2">
+          <GhostButton onClick={onSkipDay} disabled={!canAct}>Skip Day</GhostButton>
+          <GhostButton onClick={onSkipToShowDay} disabled={!canAct}>Skip to Show Day</GhostButton>
+        </div>
+      </div>
+
       <div>
         <SectionTitle icon={Ticket}>Show Name</SectionTitle>
         <input
@@ -4041,15 +4300,29 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
 
         {venueEditorOpen && (
           <div className="rounded-lg p-3 mb-3" style={{ backgroundColor: C.canvasAlt }}>
-            <p className="wgm-mono text-[9px] mb-1.5" style={{ color: C.inkFaint }}>VENUE</p>
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              {unlocked.map((v) => (
-                <button key={v.id} onClick={() => onUpdateDraft({ venueId: v.id })} className="rounded-md p-2 text-left" style={{ backgroundColor: draftShow.venueId === v.id ? C.ink : C.cream, border: `1px solid ${C.line}` }}>
-                  <p className="text-xs font-semibold" style={{ color: draftShow.venueId === v.id ? C.gold : C.ink }}>{v.name}</p>
-                  <p className="wgm-mono text-[9px]" style={{ color: draftShow.venueId === v.id ? 'rgba(246,240,225,0.6)' : C.inkFaint }}>Cap {v.capacity.toLocaleString()} · {money(v.rent)} rent</p>
-                </button>
-              ))}
+            <p className="wgm-mono text-[9px] mb-1.5" style={{ color: C.inkFaint }}>VENUE — {availableVenues.length} AVAILABLE THIS WEEK</p>
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              {availableVenues.map((v) => {
+                const leanLabel = v.crowdLean ? (STYLE_CONFIG[v.crowdLean] || {}).label : null;
+                const isHome = v.crowdLean === company.style;
+                return (
+                  <button key={v.id} onClick={() => onUpdateDraft({ venueId: v.id })} className="rounded-md p-2 text-left" style={{ backgroundColor: draftShow.venueId === v.id ? C.ink : C.cream, border: `1px solid ${v.crowdLean ? (isHome ? C.gold : C.rope) : C.line}` }}>
+                    <p className="text-xs font-semibold" style={{ color: draftShow.venueId === v.id ? C.gold : C.ink }}>{v.name}</p>
+                    <p className="wgm-mono text-[9px]" style={{ color: draftShow.venueId === v.id ? 'rgba(246,240,225,0.6)' : C.inkFaint }}>Cap {v.capacity.toLocaleString()} · {money(v.rent)} rent</p>
+                    {leanLabel && (
+                      <p className="wgm-mono text-[9px] mt-0.5" style={{ color: draftShow.venueId === v.id ? (isHome ? C.gold : '#E8897A') : (isHome ? C.gold : C.rope) }}>
+                        {isHome ? `HOME CROWD · ${leanLabel.toUpperCase()}` : `${leanLabel.toUpperCase()} CROWD · MISMATCH`}
+                      </p>
+                    )}
+                  </button>
+                );
+              })}
             </div>
+            {(company.unavailableVenueIds || []).length > 0 && (
+              <p className="text-[10px] mb-2" style={{ color: C.rope }}>
+                Booked elsewhere this week: {(company.unavailableVenueIds || []).map((id) => (ALL_VENUES.find((v) => v.id === id) || {}).name).filter(Boolean).join(', ')}
+              </p>
+            )}
             <p className="wgm-mono text-[9px] mb-1.5" style={{ color: C.inkFaint }}>TICKET PRICE — {money(draftShow.ticketPrice)}</p>
             <input type="range" min="5" max="150" step="5" value={draftShow.ticketPrice} onChange={(e) => onUpdateDraft({ ticketPrice: Number(e.target.value) })} className="w-full" />
           </div>
@@ -4421,6 +4694,13 @@ function ShowResultModal({ result, roster, onClose }) {
             {showLetterGrade({ attendance: result.attendance, capacity: result.venue.capacity, avgStars: result.avgStars, netProfit: result.netProfit })}
           </span>
         </div>
+        {result.crowdVerdict && (
+          <p className="text-center text-[11px] mt-2" style={{ color: result.crowdVerdict === 'won_over' ? C.good : result.crowdVerdict === 'bombed' ? C.rope : 'rgba(246,240,225,0.6)' }}>
+            {result.crowdVerdict === 'won_over' && `This crowd wasn't your usual audience — but you won them over. Extra reputation earned.`}
+            {result.crowdVerdict === 'bombed' && `This crowd wasn't your usual audience, and the show didn't land. That cost you extra reputation.`}
+            {result.crowdVerdict === 'flat' && `A mismatched crowd tonight — the show was fine, but it didn't change many minds either way.`}
+          </p>
+        )}
         <div className="h-px my-3" style={{ backgroundColor: C.inkFaint }} />
         <div className="grid grid-cols-3 gap-2 text-center">
           <div><p className="wgm-mono text-[9px]" style={{ color: 'rgba(246,240,225,0.55)' }}>REVENUE</p><p className="wgm-mono text-sm" style={{ color: C.good }}>{money(result.revenue)}</p></div>
@@ -4843,7 +5123,7 @@ function ShopTab({
 }) {
   const DEPTS = [
     { id: 'titles', label: 'Titles', icon: Crown, blurb: `${titles.length} championship${titles.length !== 1 ? 's' : ''}` },
-    { id: 'venues', label: 'Venues', icon: MapPin, blurb: `${unlocked.length}/${VENUE_TIERS.length} unlocked` },
+    { id: 'venues', label: 'Venues', icon: MapPin, blurb: `${new Set(unlocked.map((v) => v.tierId)).size}/${VENUE_TIERS.length} tiers` },
     { id: 'ring', label: 'Ring', icon: Shield, blurb: `Lv ${upgradeLevel(company, 'ring')}/5` },
     { id: 'concessions', label: 'Concessions', icon: Coffee, blurb: `${company.concessionsMenu.length} items` },
     { id: 'merch', label: 'Merch', icon: ShoppingBag, blurb: `${company.merchMenu.length} items` },
@@ -4881,16 +5161,28 @@ function ShopTab({
 
       {dept === 'venues' && (
         <div>
-          <p className="text-xs mb-3" style={{ color: C.inkFaint }}>Venue capacity and rent scale with your reputation. Pick the actual venue for a night when you book a show.</p>
-          <div className="grid grid-cols-2 gap-2">
-            {VENUE_TIERS.map((v) => {
-              const isUnlocked = v.minRep <= company.reputation;
+          <p className="text-xs mb-3" style={{ color: C.inkFaint }}>Venue capacity and rent scale with your reputation. Some venues cater to a specific style of wrestling — a home crowd boosts you, a mismatched one costs you at the gate but can pay off big if you win them over. How many variants show up each week depends on how many promotions are active in your region.</p>
+          <div className="space-y-3">
+            {VENUE_TIERS.map((tier) => {
+              const variants = ALL_VENUES.filter((v) => v.tierId === tier.id);
+              const isUnlocked = tier.minRep <= company.reputation;
               return (
-                <div key={v.id} className="wgm-price-tag rounded-lg p-2.5" style={{ backgroundColor: isUnlocked ? C.cream : C.canvasAlt, border: `1px solid ${C.line}`, opacity: isUnlocked ? 1 : 0.55 }}>
-                  <p className="text-xs font-semibold" style={{ color: C.ink }}>{v.name}</p>
-                  <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>Cap. {v.capacity.toLocaleString()}</p>
-                  <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{money(v.rent)} rent</p>
-                  {!isUnlocked && <p className="wgm-mono text-[9px] mt-0.5" style={{ color: C.rope }}>Needs {v.minRep} rep</p>}
+                <div key={tier.id}>
+                  <p className="wgm-mono text-[9px] mb-1.5" style={{ color: C.inkFaint }}>{tier.name.toUpperCase()} TIER · CAP {tier.capacity.toLocaleString()}</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {variants.map((v) => {
+                      const leanLabel = v.crowdLean ? (STYLE_CONFIG[v.crowdLean] || {}).label : null;
+                      const isHome = v.crowdLean === company.style;
+                      return (
+                        <div key={v.id} className="wgm-price-tag rounded-lg p-2.5" style={{ backgroundColor: isUnlocked ? C.cream : C.canvasAlt, border: `1px solid ${v.crowdLean ? (isHome ? C.gold : C.rope) : C.line}`, opacity: isUnlocked ? 1 : 0.55 }}>
+                          <p className="text-xs font-semibold" style={{ color: C.ink }}>{v.name}</p>
+                          <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{money(v.rent)} rent</p>
+                          {leanLabel && <p className="wgm-mono text-[9px] mt-0.5" style={{ color: isHome ? C.gold : C.rope }}>{isHome ? 'HOME CROWD' : `${leanLabel.toUpperCase()} CROWD`}</p>}
+                          {!isUnlocked && <p className="wgm-mono text-[9px] mt-0.5" style={{ color: C.rope }}>Needs {tier.minRep} rep</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
