@@ -4,7 +4,7 @@ import {
   Star, AlertTriangle, Plus, X, ChevronRight, ChevronUp, ChevronDown,
   Activity, Shield, Mic, Radio, Heart, Zap, RefreshCw, Home,
   UserPlus, UserMinus, Award, Flame, Clock, MapPin, Ticket, Loader2, Check,
-  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2, Palette, Newspaper, Briefcase, UserCircle
+  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2, Palette, Newspaper, Briefcase, UserCircle, Mail
 } from 'lucide-react';
 
 /* ============================================================
@@ -746,6 +746,7 @@ function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainmen
     storyline: [],
     hometown: pick(REGION_HOMETOWNS[regionId] || REGION_HOMETOWNS.usa),
     weight: clamp(180 + Math.round((stats.strength / 99) * 130) + randInt(-15, 15), 175, 340),
+    contractPromise: null,
   };
 }
 
@@ -960,6 +961,30 @@ function tickWellness(w) {
     }
   }
   return { wellness: { status, weeksInStatus }, news, repPenalty };
+}
+const CONTRACT_TERMS = [
+  { id: 'standard', label: 'Standard Contract', bonusMult: 1, blurb: 'Pay the full signing bonus. No strings attached.' },
+  { id: 'promise_title', label: 'Promise the Title', bonusMult: 0.5, blurb: "Half the signing bonus — but you're promising they'll be champion within 15 weeks. Break that promise and it costs you.", promiseType: 'title', promiseWeeks: 15 },
+  { id: 'creative_control', label: 'Creative Control Clause', bonusMult: 0.75, blurb: "A smaller discount, but they can't be released for 10 weeks without a real hit to your reputation as a boss.", promiseType: 'job_security', promiseWeeks: 10 },
+];
+function checkContractPromise(w, ctx, week, year) {
+  const promise = w.contractPromise;
+  if (!promise) return { contractPromise: null, news: null, moraleDelta: 0, bossRepDelta: 0 };
+  if (promise.type === 'title') {
+    const holdsTitle = ctx.nextTitles.some((t) => t.holderIds.includes(w.id));
+    if (holdsTitle) {
+      return { contractPromise: null, news: `${w.name} became champion, just as promised when they signed. Word like that gets around.`, moraleDelta: 15, bossRepDelta: 3 };
+    }
+    const expired = year > promise.deadlineYear || (year === promise.deadlineYear && week > promise.deadlineWeek);
+    if (expired) {
+      return { contractPromise: null, news: `${w.name} never got the title shot they were promised. They haven't forgotten.`, moraleDelta: -20, bossRepDelta: -5 };
+    }
+  }
+  if (promise.type === 'job_security') {
+    const expired = year > promise.deadlineYear || (year === promise.deadlineYear && week > promise.deadlineWeek);
+    if (expired) return { contractPromise: null, news: null, moraleDelta: 0, bossRepDelta: 0 };
+  }
+  return { contractPromise: promise, news: null, moraleDelta: 0, bossRepDelta: 0 };
 }
 
 /* ---------- Ambition fulfillment & escalation ---------- */
@@ -1202,6 +1227,23 @@ function processRivalConsolidation(rivals) {
     news.push(`A new promotion, ${name}, has launched.`);
   }
   return { rivals: list, news };
+}
+function maybeGenerateRivalOffer(company, roster, rivals, existingInbox) {
+  if (existingInbox.length >= 3) return null;
+  if (!rivals.length) return null;
+  if (Math.random() > 0.12) return null;
+  const rival = pick(rivals);
+  let expiresWeek = company.week + 3; let expiresYear = company.year;
+  while (expiresWeek > 52) { expiresWeek -= 52; expiresYear += 1; }
+  const kind = Math.random() < 0.5 ? 'buy_offer' : 'alliance_proposal';
+  if (kind === 'alliance_proposal') {
+    if (rival.relationship === 'pact') return null;
+    return { id: uid(), type: 'alliance_proposal', rivalId: rival.id, rivalName: rival.name, text: `${rival.name} is proposing a territory pact — mutual respect, no poaching, free of charge.`, createdWeek: company.week, createdYear: company.year, expiresWeek, expiresYear };
+  }
+  if (!roster.length) return null;
+  const target = pick(roster);
+  const offerAmount = Math.round(target.salary * randInt(8, 20));
+  return { id: uid(), type: 'buy_offer', rivalId: rival.id, rivalName: rival.name, wrestlerId: target.id, wrestlerName: target.name, offerAmount, text: `${rival.name} wants to buy ${target.name} off your roster for ${money(offerAmount)}.`, createdWeek: company.week, createdYear: company.year, expiresWeek, expiresYear };
 }
 function rivalPoachChance(rival) {
   if (rival.relationship === 'pact') return 0;
@@ -1593,13 +1635,14 @@ function createNewGame(opts) {
     },
     roster: startingRoster,
     freeAgents: generateFreeAgentPool(region, style, 6, true),
-    staff: { announcers: [generateStaff('Announcer')], commentators: [generateStaff('Commentator')], referees: [generateStaff('Referee')], writers: [], roadAgents: [] },
+    staff: { announcers: [], commentators: [], referees: [], writers: [], roadAgents: [] },
     staffPool: { announcers: Array.from({ length: 3 }, () => generateStaff('Announcer')), commentators: Array.from({ length: 3 }, () => generateStaff('Commentator')), referees: Array.from({ length: 3 }, () => generateStaff('Referee')), writers: Array.from({ length: 3 }, () => generateStaff('Writer')), roadAgents: Array.from({ length: 3 }, () => generateStaff('Road Agent')) },
     titles: [],
     tagTeams: [],
     stables: [],
     feuds: [],
     relationships: [],
+    inbox: [],
     rivals: generateRivalPromotions(rivalCount),
     mediaRecaps: [],
     history: [],
@@ -1616,7 +1659,7 @@ function normalizeGame(loaded) {
     const titleId = item.titleId !== undefined ? item.titleId : null;
     return { ...item, winnerIds, titleId };
   });
-  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280) });
+  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280), contractPromise: w.contractPromise !== undefined ? w.contractPromise : null });
   const fixStaff = (s) => ({ ...s, trait: s.trait !== undefined ? s.trait : null, ambition: { unhappyStreak: 0, contentStreak: 0, ...(s.ambition || assignStaffAmbition()) }, weeksEmployed: s.weeksEmployed || 0 });
   const loadedCompany = loaded.company || {};
   const oldUpgrades = loadedCompany.upgrades || {};
@@ -1652,6 +1695,7 @@ function normalizeGame(loaded) {
     stables: loaded.stables || [],
     feuds: loaded.feuds || [],
     relationships: loaded.relationships || [],
+    inbox: loaded.inbox || [],
     rivals: loaded.rivals || generateRivalPromotions(),
     mediaRecaps: loaded.mediaRecaps || [],
     roster: (loaded.roster || []).map(fixWrestler),
@@ -1828,6 +1872,7 @@ export default function WrestlingGM() {
   const [shopDept, setShopDept] = useState('titles');
   const [rivalsModalOpen, setRivalsModalOpen] = useState(false);
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
+  const [inboxModalOpen, setInboxModalOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [toast, setToast] = useState(null);
 
@@ -1886,17 +1931,22 @@ export default function WrestlingGM() {
     updateGame((g) => ({ ...g, roster: g.roster.map((w) => (w.id === id ? { ...w, alignment } : w)) }));
   }
   function releaseWrestler(id) {
-    updateGame((g) => ({
-      ...g,
-      company: { ...g.company, bossReputation: bumpBossRep(g, -2) },
-      roster: g.roster.filter((w) => w.id !== id),
-      tagTeams: g.tagTeams.filter((t) => !t.memberIds.includes(id)),
-      stables: g.stables
-        .map((s) => ({ ...s, memberIds: s.memberIds.filter((m) => m !== id), leaderId: s.leaderId === id ? (s.memberIds.find((m) => m !== id) || null) : s.leaderId }))
-        .filter((s) => s.memberIds.length >= 2),
-      feuds: g.feuds.map((f) => (f.aId === id || f.bId === id || f.aPartnerId === id || f.bPartnerId === id) ? { ...f, status: 'ended' } : f),
-      relationships: g.relationships.filter((r) => r.aId !== id && r.bId !== id),
-    }));
+    updateGame((g) => {
+      const w = g.roster.find((r) => r.id === id);
+      const hasActiveJobSecurity = w && w.contractPromise && w.contractPromise.type === 'job_security' &&
+        !(g.company.year > w.contractPromise.deadlineYear || (g.company.year === w.contractPromise.deadlineYear && g.company.week > w.contractPromise.deadlineWeek));
+      return {
+        ...g,
+        company: { ...g.company, bossReputation: bumpBossRep(g, hasActiveJobSecurity ? -8 : -2) },
+        roster: g.roster.filter((r) => r.id !== id),
+        tagTeams: g.tagTeams.filter((t) => !t.memberIds.includes(id)),
+        stables: g.stables
+          .map((s) => ({ ...s, memberIds: s.memberIds.filter((m) => m !== id), leaderId: s.leaderId === id ? (s.memberIds.find((m) => m !== id) || null) : s.leaderId }))
+          .filter((s) => s.memberIds.length >= 2),
+        feuds: g.feuds.map((f) => (f.aId === id || f.bId === id || f.aPartnerId === id || f.bPartnerId === id) ? { ...f, status: 'ended' } : f),
+        relationships: g.relationships.filter((r) => r.aId !== id && r.bId !== id),
+      };
+    });
     setSelectedWrestler(null); setConfirmAction(null);
     showToast('Wrestler released.');
   }
@@ -1976,12 +2026,13 @@ export default function WrestlingGM() {
     });
     showToast('Gave a raise.');
   }
-  function signFreeAgent(id) {
+  function signFreeAgent(id, termId) {
     updateGame((g) => {
       if (!canActToday(g.company)) { showToast('No time left this week to sign anyone — run the show or wait for next week.'); return g; }
       const w = g.freeAgents.find((f) => f.id === id);
       if (!w) return g;
-      let bonus = w.salary * 2 * (w.signingMult || 1);
+      const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
+      let bonus = w.salary * 2 * (w.signingMult || 1) * term.bonusMult;
       if (hasTrait(w, 'difficult')) bonus = Math.round(bonus * 1.3);
       if (hasTrait(w, 'company_man')) bonus = Math.round(bonus * 0.8);
       const bossRep = g.company.bossReputation !== undefined ? g.company.bossReputation : 50;
@@ -1989,16 +2040,23 @@ export default function WrestlingGM() {
         if (bossRep >= 70) bonus = Math.round(bonus * 0.85);
         else if (bossRep <= 30) bonus = Math.round(bonus * 1.25);
       }
+      bonus = Math.round(bonus);
       if (g.company.funds < bonus) { showToast('Not enough funds for the signing bonus.'); return g; }
       let relationships = g.relationships;
       if (g.roster.length && Math.random() < 0.2) {
         const other = pick(g.roster);
         relationships = [...relationships, createRelationshipObject(w.id, w.name, other.id, other.name, randomPreexistingRelType(), g.company.week, g.company.year)];
       }
+      let deadlineWeek = g.company.week + term.promiseWeeks;
+      let deadlineYear = g.company.year;
+      while (deadlineWeek > 52) { deadlineWeek -= 52; deadlineYear += 1; }
+      const contractPromise = term.promiseType ? { type: term.promiseType, deadlineWeek, deadlineYear } : null;
+      const signStoryline = w.discoveredVia ? `Discovered via ${w.discoveredVia} and signed with ${g.company.name}.` : `Signed with ${g.company.name}.`;
+      const termStoryline = term.id === 'promise_title' ? ` Promised a title within ${term.promiseWeeks} weeks.` : term.id === 'creative_control' ? ` Negotiated a creative control clause.` : '';
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
-        roster: [...g.roster, { ...w, contractWeeksLeft: randInt(12, 26), storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: w.discoveredVia ? `Discovered via ${w.discoveredVia} and signed with ${g.company.name}.` : `Signed with ${g.company.name}.` }].slice(-20) }],
+        roster: [...g.roster, { ...w, contractWeeksLeft: randInt(12, 26), contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline }].slice(-20) }],
         freeAgents: g.freeAgents.filter((f) => f.id !== id),
         relationships,
       });
@@ -2422,6 +2480,64 @@ export default function WrestlingGM() {
     });
   }
 
+  function respondToInboxOffer(offerId, accept) {
+    updateGame((g) => {
+      const offer = (g.inbox || []).find((o) => o.id === offerId);
+      if (!offer) return g;
+      if (!accept) {
+        return { ...g, inbox: g.inbox.filter((o) => o.id !== offerId) };
+      }
+      if (offer.type === 'alliance_proposal') {
+        const rival = g.rivals.find((r) => r.id === offer.rivalId);
+        if (!rival) return { ...g, inbox: g.inbox.filter((o) => o.id !== offerId) };
+        return {
+          ...g,
+          rivals: g.rivals.map((r) => (r.id === offer.rivalId ? { ...r, relationship: 'pact' } : r)),
+          inbox: g.inbox.filter((o) => o.id !== offerId),
+          news: [`Accepted ${rival.name}'s territory pact proposal.`, ...g.news].slice(0, 30),
+        };
+      }
+      if (offer.type === 'buy_offer') {
+        const w = g.roster.find((r) => r.id === offer.wrestlerId);
+        if (!w) return { ...g, inbox: g.inbox.filter((o) => o.id !== offerId) };
+        return {
+          ...g,
+          company: { ...g.company, funds: g.company.funds + offer.offerAmount },
+          roster: g.roster.filter((r) => r.id !== offer.wrestlerId),
+          tagTeams: g.tagTeams.filter((t) => !t.memberIds.includes(offer.wrestlerId)),
+          stables: g.stables
+            .map((s) => ({ ...s, memberIds: s.memberIds.filter((m) => m !== offer.wrestlerId), leaderId: s.leaderId === offer.wrestlerId ? (s.memberIds.find((m) => m !== offer.wrestlerId) || null) : s.leaderId }))
+            .filter((s) => s.memberIds.length >= 2),
+          feuds: g.feuds.map((f) => (f.aId === offer.wrestlerId || f.bId === offer.wrestlerId || f.aPartnerId === offer.wrestlerId || f.bPartnerId === offer.wrestlerId) ? { ...f, status: 'ended' } : f),
+          relationships: g.relationships.filter((r) => r.aId !== offer.wrestlerId && r.bId !== offer.wrestlerId),
+          inbox: g.inbox.filter((o) => o.id !== offerId),
+          news: [`Sold ${w.name} to ${offer.rivalName} for ${money(offer.offerAmount)}.`, ...g.news].slice(0, 30),
+        };
+      }
+      return g;
+    });
+    showToast(accept ? 'Offer accepted.' : 'Offer declined.');
+  }
+  function endWeekWithoutShow() {
+    updateGame((g) => {
+      const staffAll = [...g.staff.announcers, ...g.staff.commentators, ...(g.staff.referees || []), ...(g.staff.writers || []), ...(g.staff.roadAgents || [])];
+      const payroll = sum(g.roster.map((w) => w.salary)) + sum(staffAll.map((s) => s.salary));
+      let nextWeek = g.company.week + 1; let nextYear = g.company.year;
+      if (nextWeek > 52) { nextWeek = 1; nextYear += 1; }
+      return {
+        ...g,
+        company: {
+          ...g.company,
+          funds: g.company.funds - payroll,
+          week: nextWeek, year: nextYear,
+          weekDay: 1,
+          unavailableVenueIds: [],
+        },
+        news: [`No show ran this week. The roster and staff still had to be paid — ${money(payroll)} in payroll.`, ...g.news].slice(0, 30),
+      };
+    });
+    showToast('Week passed with no show.');
+  }
   function runShow() {
     if (!game.draftShow.card.length) { showToast('Add at least one segment to the card first.'); return; }
     const result = simulateShow(game.draftShow, game);
@@ -2562,6 +2678,13 @@ export default function WrestlingGM() {
     nextRivals = consolidation.rivals;
     consolidation.news.forEach((n) => rivalNews.push(n));
 
+    let nextInbox = (game.inbox || []).filter((o) => !(game.company.year > o.expiresYear || (game.company.year === o.expiresYear && game.company.week > o.expiresWeek)));
+    const newOffer = maybeGenerateRivalOffer(game.company, stillRoster, nextRivals, nextInbox);
+    if (newOffer) {
+      nextInbox = [...nextInbox, newOffer];
+      rivalNews.push(`New offer in your inbox: ${newOffer.text}`);
+    }
+
     let nextTagTeams = game.tagTeams
       .map((t) => {
         const teamedUp = result.matchResults.some((m) => t.memberIds.every((id) => m.participantIds.includes(id)));
@@ -2673,11 +2796,15 @@ export default function WrestlingGM() {
     });
     const wellnessNews = [];
     let wellnessRepPenalty = 0;
+    let contractPromiseBossRep = 0;
     rosterAfterAmbitions = rosterAfterAmbitions.map((w) => {
       const { wellness, news: wNews, repPenalty } = tickWellness(w);
       if (wNews) { wellnessNews.push(wNews); addStoryline(w.id, wNews); }
       wellnessRepPenalty += repPenalty;
-      return { ...w, wellness };
+      const { contractPromise, news: promiseNews, moraleDelta, bossRepDelta } = checkContractPromise(w, ambitionCtx, game.company.week, game.company.year);
+      if (promiseNews) { wellnessNews.push(promiseNews); addStoryline(w.id, promiseNews); }
+      contractPromiseBossRep += bossRepDelta;
+      return { ...w, wellness, contractPromise, morale: clamp(w.morale + moraleDelta, 0, 100) };
     });
 
     const relationshipNews = [];
@@ -2850,7 +2977,7 @@ export default function WrestlingGM() {
         funds: game.company.funds + result.netProfit,
         reputation: nextReputation,
         mediaInterviewMilestones: nextMilestones,
-        bossReputation: clamp((game.company.bossReputation !== undefined ? game.company.bossReputation : 50) + bossRepFromDepartures, 0, 100),
+        bossReputation: clamp((game.company.bossReputation !== undefined ? game.company.bossReputation : 50) + bossRepFromDepartures + contractPromiseBossRep, 0, 100),
         week: nextWeek, year: nextYear,
         weekDay: 1,
         unavailableVenueIds: [],
@@ -2867,6 +2994,7 @@ export default function WrestlingGM() {
       stables: nextStables,
       feuds: nextFeuds,
       relationships: nextRelationships,
+      inbox: nextInbox,
       rivals: nextRivalsWithSignings,
       mediaRecaps: nextMediaRecaps,
       history: [historyEntry, ...game.history].slice(0, 60),
@@ -3135,6 +3263,7 @@ export default function WrestlingGM() {
             onOpenTv={() => { setShopDept('tv'); setTab('shop'); }}
             onOpenRivals={() => setRivalsModalOpen(true)}
             onOpenMedia={() => setMediaModalOpen(true)}
+            onOpenInbox={() => setInboxModalOpen(true)}
             onGoRoster={() => { setRosterSubTab('active'); setTab('roster'); }}
             onGoFreeAgents={() => setTab('freeagents')}
             onGoHistory={() => setTab('history')}
@@ -3180,6 +3309,7 @@ export default function WrestlingGM() {
             onUpdateDraft={updateDraft} onOpenMatchBuilder={() => setMatchBuilderOpen(true)}
             onOpenPromoBuilder={() => setPromoBuilderOpen(true)} onRemove={removeCardItem} onMove={moveCardItem}
             onRun={runShow}
+            onEndWeekWithoutShow={endWeekWithoutShow}
             onRepairRing={repairRing} onRestockSupplies={restockSupplies} onSkipDay={skipDay} onSkipToShowDay={skipToShowDay}
           />
         )}
@@ -3299,6 +3429,11 @@ export default function WrestlingGM() {
         <MediaModal recaps={game.mediaRecaps} companyName={company.name} onClose={() => setMediaModalOpen(false)} />
       )}
 
+      {/* Inbox */}
+      {inboxModalOpen && (
+        <InboxModal inbox={game.inbox || []} company={company} onClose={() => setInboxModalOpen(false)} onRespond={respondToInboxOffer} />
+      )}
+
       {/* Promo builder */}
       {promoBuilderOpen && (
         <PromoBuilderModal
@@ -3337,7 +3472,7 @@ export default function WrestlingGM() {
 /* ============================================================
    DASHBOARD TAB
    ============================================================ */
-function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals, onOpenMedia, onGoRoster, onGoFreeAgents, onGoHistory }) {
+function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals, onOpenMedia, onOpenInbox, onGoRoster, onGoFreeAgents, onGoHistory }) {
   const { company, roster } = game;
   const injured = roster.filter((w) => w.injury);
   const avgPop = Math.round(average(roster.map((w) => w.popularity)));
@@ -3442,6 +3577,16 @@ function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, 
             <div>
               <p className="text-sm font-semibold" style={{ color: C.ink }}>Wrestling Media</p>
               <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{game.mediaRecaps.length ? `${game.mediaRecaps.length} RECAP${game.mediaRecaps.length !== 1 ? 'S' : ''} PUBLISHED` : 'NO RECAPS YET'}</p>
+            </div>
+          </div>
+          <ChevronRight size={16} color={C.inkFaint} />
+        </button>
+        <button onClick={onOpenInbox} className="w-full p-3.5 text-left flex items-center justify-between" style={{ backgroundColor: C.cream, borderTop: `1px solid ${C.line}` }}>
+          <div className="flex items-center gap-2">
+            <Mail size={16} color={(game.inbox || []).length ? C.rope : C.gold} />
+            <div>
+              <p className="text-sm font-semibold" style={{ color: C.ink }}>Inbox</p>
+              <p className="wgm-mono text-[9px]" style={{ color: (game.inbox || []).length ? C.rope : C.inkFaint }}>{(game.inbox || []).length ? `${game.inbox.length} PENDING OFFER${game.inbox.length !== 1 ? 'S' : ''}` : 'NOTHING PENDING'}</p>
             </div>
           </div>
           <ChevronRight size={16} color={C.inkFaint} />
@@ -4028,9 +4173,11 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
 }
 
 function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation }) {
+  const [termId, setTermId] = useState('standard');
   const bossRep = bossReputation !== undefined ? bossReputation : 50;
   const isBigName = wrestler.tier === 'Star' || wrestler.tier === 'Legend';
-  let cost = wrestler.salary * 2 * (wrestler.signingMult || 1);
+  const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
+  let cost = wrestler.salary * 2 * (wrestler.signingMult || 1) * term.bonusMult;
   if (hasTrait(wrestler, 'difficult')) cost = Math.round(cost * 1.3);
   if (hasTrait(wrestler, 'company_man')) cost = Math.round(cost * 0.8);
   if (isBigName) {
@@ -4097,11 +4244,20 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation }) {
         <span>Asking Salary: <span className="wgm-mono" style={{ color: C.ink }}>{money(wrestler.salary)}/wk</span></span>
       </div>
       {wrestler.discoveredVia && (
-        <p className="text-[11px] mb-5" style={{ color: C.inkFaint }}>Found: {wrestler.discoveredVia}</p>
+        <p className="text-[11px] mb-3" style={{ color: C.inkFaint }}>Found: {wrestler.discoveredVia}</p>
       )}
-      {!wrestler.discoveredVia && <div className="mb-5" />}
 
-      <PrimaryButton full icon={UserPlus} onClick={() => onSign(wrestler.id)} disabled={funds < cost}>Sign for {money(cost)}</PrimaryButton>
+      <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>NEGOTIATE THE CONTRACT</p>
+      <div className="space-y-2 mb-5">
+        {CONTRACT_TERMS.map((t) => (
+          <button key={t.id} onClick={() => setTermId(t.id)} className="w-full rounded-lg p-2.5 text-left" style={{ backgroundColor: termId === t.id ? C.gold : C.canvasAlt, border: `1px solid ${C.line}` }}>
+            <p className="text-xs font-bold" style={{ color: termId === t.id ? C.ink : C.ink }}>{t.label}</p>
+            <p className="text-[10px]" style={{ color: termId === t.id ? C.inkSoft : C.inkFaint }}>{t.blurb}</p>
+          </button>
+        ))}
+      </div>
+
+      <PrimaryButton full icon={UserPlus} onClick={() => onSign(wrestler.id, termId)} disabled={funds < cost}>Sign for {money(cost)}</PrimaryButton>
     </Modal>
   );
 }
@@ -4199,7 +4355,7 @@ function StaffRow({ s, role, funds, onFire, onRaise }) {
 /* ============================================================
    BOOK SHOW TAB
    ============================================================ */
-function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, company, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onRun, onRepairRing, onRestockSupplies, onSkipDay, onSkipToShowDay }) {
+function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, company, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onRun, onRepairRing, onRestockSupplies, onSkipDay, onSkipToShowDay, onEndWeekWithoutShow }) {
   const [venueEditorOpen, setVenueEditorOpen] = useState(false);
   const wrestlerName = (id) => (roster.find((r) => r.id === id) || {}).name || '???';
   const wrestlerBilling = (id) => {
@@ -4259,6 +4415,9 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
           <GhostButton onClick={onSkipDay} disabled={!canAct}>Skip Day</GhostButton>
           <GhostButton onClick={onSkipToShowDay} disabled={!canAct}>Skip to Show Day</GhostButton>
         </div>
+        <button onClick={onEndWeekWithoutShow} className="wgm-mono text-[9px] underline mt-2" style={{ color: 'rgba(246,240,225,0.5)' }}>
+          Not ready? End the week with no show (payroll still due).
+        </button>
       </div>
 
       <div>
@@ -5598,6 +5757,34 @@ function TvDealSection({ company, onSign }) {
 /* ============================================================
    RIVAL PROMOTIONS MODAL
    ============================================================ */
+function InboxModal({ inbox, company, onClose, onRespond }) {
+  return (
+    <Modal title="Inbox" onClose={onClose} wide>
+      <p className="text-xs mb-3" style={{ color: C.inkFaint }}>Real proposals from the other promotions in the world — not just news. Offers expire if you sit on them too long.</p>
+      {inbox.length === 0 && <EmptyState text="Nothing pending right now. Check back soon." />}
+      <div className="space-y-2">
+        {inbox.map((o) => {
+          const weeksLeft = (o.expiresYear - company.year) * 52 + (o.expiresWeek - company.week);
+          return (
+            <div key={o.id} className="rounded-lg p-3" style={{ backgroundColor: C.cream, border: `1px solid ${C.line}` }}>
+              <div className="flex items-center justify-between mb-1">
+                <p className="text-sm font-bold" style={{ color: C.ink }}>{o.rivalName}</p>
+                <Pill bg={o.type === 'buy_offer' ? C.rope : C.gold} color={o.type === 'buy_offer' ? C.cream : C.ink}>{o.type === 'buy_offer' ? 'BUY OFFER' : 'ALLIANCE PROPOSAL'}</Pill>
+              </div>
+              <p className="text-xs mb-2" style={{ color: C.inkSoft }}>{o.text}</p>
+              <p className="wgm-mono text-[9px] mb-2" style={{ color: C.inkFaint }}>EXPIRES IN {Math.max(0, weeksLeft)} WEEK{weeksLeft !== 1 ? 'S' : ''}</p>
+              <div className="flex gap-2">
+                <GhostButton onClick={() => onRespond(o.id, true)}>Accept</GhostButton>
+                <GhostButton danger onClick={() => onRespond(o.id, false)}>Decline</GhostButton>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
 function RivalsModal({ rivals, company, onClose, onSetRelationship, onSignPact, onBreakPact, onAcquire }) {
   const ranked = [
     { id: 'player', name: company.name, reputation: company.reputation, isPlayer: true },
