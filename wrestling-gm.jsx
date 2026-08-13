@@ -4,8 +4,27 @@ import {
   Star, AlertTriangle, Plus, X, ChevronRight, ChevronUp, ChevronDown,
   Activity, Shield, Mic, Radio, Heart, Zap, RefreshCw, Home,
   UserPlus, UserMinus, Award, Flame, Clock, MapPin, Ticket, Loader2, Check,
-  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2, Palette, Newspaper, Briefcase, UserCircle, Mail
+  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2, Palette, Newspaper, Briefcase, UserCircle, Mail, Bug
 } from 'lucide-react';
+
+/* ============================================================
+   SAVE VERSIONING
+   Bump SAVE_VERSION whenever the game-state shape changes in a
+   way future saves need to know about. normalizeGame() is the
+   single migration point — every load passes through it, and
+   every field it backfills should be listed in the changelog
+   below so we know why it's there. Stored at the top level as
+   game.saveVersion (describes the whole persisted shape, not
+   just the company sub-object).
+
+   v1 (current) — baseline. All backward-compat fields already
+   present in normalizeGame's fixWrestler/fixStaff/company block
+   (gender, confidence, wellness, hometown/weight, contractPromise,
+   referees/writers/roadAgents staff groups, relationships, inbox,
+   weekDay/ringCondition/supplies, journalists, mediaInterviewMilestones)
+   are folded into v1 — this file has no pre-v1 saves in the wild.
+   ============================================================ */
+const SAVE_VERSION = 1;
 
 /* ============================================================
    DESIGN TOKENS — "Territory Office" aesthetic: promoter's
@@ -1309,31 +1328,31 @@ function journalistTake(leanId, recap, rivals) {
   const topRival = sortedRivals[0] || null;
   const hotRival = (rivals || []).find((r) => r.momentum >= 2);
   const decliningRival = (rivals || []).find((r) => r.momentum <= -2);
-  switch (leanId) {
-    case 'technical':
-      if (recap.topMatch && recap.topMatch.stars >= 4) return `${recap.topMatch.label} was a clinic — ${recap.topMatch.stars}★ of exactly what this business should look like.`;
-      if (recap.avgStars >= 3.5) return `Solid fundamentals across the board this month. A ${recap.avgStars.toFixed(1)}★ average speaks for itself.`;
-      if (recap.shows === 0) return `Nothing to review this month. Can't grade a show that never happened.`;
-      if (recap.avgStars < 2.5) return `The in-ring product needs work. A ${recap.avgStars.toFixed(1)}★ average won't win over the hardcore fans who actually watch the wrestling.`;
-      if (topRival) return `For my money, ${topRival.name} is putting on the more consistent product across the industry right now.`;
-      return `A quiet month for the purists. Nothing that'll make a highlight reel, nothing that hurt either.`;
-    case 'hardcore':
-      if (recap.topMatch && recap.topMatch.stars >= 4.5) return `${recap.topMatch.label} was the kind of chaos I live for. ${recap.topMatch.stars}★, no notes.`;
-      if (recap.titleChanges.length) return `Gold changed hands this month and the crowd ate it up. More of this, less standing around.`;
-      if (hotRival) return `${hotRival.name} is on an absolute tear lately. Somebody in this business better answer that.`;
-      if (recap.shows === 0) return `A whole month with no shows? Fans forget you exist if you don't give them something.`;
-      if (recap.shows <= 1) return `One show all month? Fans need chaos more often than that.`;
-      return `Nothing broke, nothing bled. Forgettable month if you ask me.`;
-    case 'rumors':
-      if (recap.titleChanges.length) return `Word is ${recap.titleChanges[0].winner} winning the ${recap.titleChanges[0].titleName} wasn't universally popular backstage. Keep an eye on that locker room.`;
-      if (decliningRival) return `Hearing things are getting shaky over at ${decliningRival.name}. Wouldn't be shocked if some of their talent starts making calls.`;
-      if (recap.powerRankings.length) return `${recap.powerRankings[0].name} is the hottest name in the building right now. Don't be shocked if a rival comes calling.`;
-      if (topRival && topRival.reputation >= 60) return `${topRival.name} is the promotion everybody in this business is talking about right now. Reputation like that doesn't happen by accident.`;
-      if (recap.totalProfit < 0) return `Hearing the books were red this month. How long can that go on before something gives?`;
-      return `Quiet on the rumor mill this month — which almost never means nothing's happening.`;
-    default:
-      return '';
+  const candidates = [];
+
+  if (leanId === 'technical') {
+    if (recap.shows === 0) return `Nothing to review this month. Can't grade a show that never happened.`;
+    if (recap.topMatch && recap.topMatch.stars >= 4) candidates.push(`${recap.topMatch.label} was a clinic — ${recap.topMatch.stars}★ of exactly what this business should look like.`);
+    if (recap.avgStars >= 3.5) candidates.push(`Solid fundamentals across the board this month. A ${recap.avgStars.toFixed(1)}★ average speaks for itself.`);
+    if (recap.avgStars < 2.5) candidates.push(`The in-ring product needs work. A ${recap.avgStars.toFixed(1)}★ average won't win over the hardcore fans who actually watch the wrestling.`);
+    if (topRival) candidates.push(`For my money, ${topRival.name} is putting on the more consistent product across the industry right now.`);
+    if (!candidates.length) candidates.push(`A quiet month for the purists. Nothing that'll make a highlight reel, nothing that hurt either.`);
+  } else if (leanId === 'hardcore') {
+    if (recap.shows === 0) return `A whole month with no shows? Fans forget you exist if you don't give them something.`;
+    if (recap.topMatch && recap.topMatch.stars >= 4.5) candidates.push(`${recap.topMatch.label} was the kind of chaos I live for. ${recap.topMatch.stars}★, no notes.`);
+    if (recap.titleChanges.length) candidates.push(`Gold changed hands this month and the crowd ate it up. More of this, less standing around.`);
+    if (hotRival) candidates.push(`${hotRival.name} is on an absolute tear lately. Somebody in this business better answer that.`);
+    if (recap.shows <= 1) candidates.push(`One show all month? Fans need chaos more often than that.`);
+    if (!candidates.length) candidates.push(`Nothing broke, nothing bled. Forgettable month if you ask me.`);
+  } else if (leanId === 'rumors') {
+    if (recap.titleChanges.length) candidates.push(`Word is ${recap.titleChanges[0].winner} winning the ${recap.titleChanges[0].titleName} wasn't universally popular backstage. Keep an eye on that locker room.`);
+    if (decliningRival) candidates.push(`Hearing things are getting shaky over at ${decliningRival.name}. Wouldn't be shocked if some of their talent starts making calls.`);
+    if (topRival && topRival.reputation >= 60) candidates.push(`${topRival.name} is the promotion everybody in this business is talking about right now. Reputation like that doesn't happen by accident.`);
+    if (recap.powerRankings.length) candidates.push(`${recap.powerRankings[0].name} is the hottest name in the building right now. Don't be shocked if a rival comes calling.`);
+    if (recap.totalProfit < 0) candidates.push(`Hearing the books were red this month. How long can that go on before something gives?`);
+    if (!candidates.length) candidates.push(`Quiet on the rumor mill this month — which almost never means nothing's happening.`);
   }
+  return pick(candidates);
 }
 const MEDIA_INTERVIEW_MILESTONES = [25, 50, 75, 90];
 function mediaInterviewQuote(company, journalist, milestone) {
@@ -1608,6 +1627,7 @@ function createNewGame(opts) {
   const startingRoster = [{ ...believer, storyline: [{ week: 1, year: 1, text: 'Believed in this promotion from day one.' }] }];
   const startingFunds = Math.max(500, fundsTier.funds + background.fundsMod - ringOrigin.cost);
   return {
+    saveVersion: SAVE_VERSION,
     company: {
       name: name || 'Independent Wrestling',
       funds: startingFunds,
@@ -1645,6 +1665,7 @@ function createNewGame(opts) {
     inbox: [],
     rivals: generateRivalPromotions(rivalCount),
     mediaRecaps: [],
+    devLog: [],
     history: [],
     news: [`Welcome to ${regionLabel}. Booking in the ${styleLabel} tradition — you've got ${believer.name}, a ring, and a dream. Go find the rest of your roster.`, `Your ring: ${ringOrigin.label.toLowerCase()}. ${ringOrigin.blurb}`, background.blurb],
     draftShow: makeEmptyDraft(),
@@ -1666,6 +1687,7 @@ function normalizeGame(loaded) {
   const migratedWeapons = loadedCompany.weaponsOwned || (oldUpgrades.weapons ? ['chairs', 'tables'] : []);
   return {
     ...loaded,
+    saveVersion: SAVE_VERSION,
     company: {
       region: 'usa', style: 'sports_entertainment',
       ...loadedCompany,
@@ -1698,6 +1720,7 @@ function normalizeGame(loaded) {
     inbox: loaded.inbox || [],
     rivals: loaded.rivals || generateRivalPromotions(),
     mediaRecaps: loaded.mediaRecaps || [],
+    devLog: loaded.devLog || [],
     roster: (loaded.roster || []).map(fixWrestler),
     freeAgents: (loaded.freeAgents || []).map(fixWrestler),
     staff: {
@@ -1873,6 +1896,7 @@ export default function WrestlingGM() {
   const [rivalsModalOpen, setRivalsModalOpen] = useState(false);
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [inboxModalOpen, setInboxModalOpen] = useState(false);
+  const [devLogModalOpen, setDevLogModalOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [toast, setToast] = useState(null);
 
@@ -1913,6 +1937,18 @@ export default function WrestlingGM() {
       name: setupName.trim(), regionId: setupRegion, styleId: setupStyle,
       rivalCount: setupRivalCount, fundsTierId: setupFundsTierId, difficultyId: setupDifficultyId,
       theme: chosenTheme, backgroundId: setupBackgroundId, ringOriginId: setupRingOriginId,
+    });
+    setGame(g); persist(g); setNeedsSetup(false);
+  }
+  function startDebugTestGame() {
+    // Fixed setup parameters for fast, repeatable regression testing.
+    // Not bit-for-bit deterministic (wrestler generation still uses
+    // Math.random() — no seeded RNG in this codebase), but the starting
+    // conditions and flow are consistent every time this is used.
+    const g = createNewGame({
+      name: 'Debug Test Promotion', regionId: 'usa', styleId: 'sports_entertainment',
+      rivalCount: 5, fundsTierId: 'standard', difficultyId: 'normal',
+      theme: { presetId: 'classic', ...THEME_PRESETS[0] }, backgroundId: 'family', ringOriginId: 'used',
     });
     setGame(g); persist(g); setNeedsSetup(false);
   }
@@ -2544,6 +2580,10 @@ export default function WrestlingGM() {
     const wrestlerUpdates = {};
     const storylineAdds = {};
     const addStoryline = (id, text) => { if (!id) return; if (!storylineAdds[id]) storylineAdds[id] = []; storylineAdds[id].push(text); };
+    const devLogAdds = [];
+    const addDevLog = (category, message) => devLogAdds.push({ week: game.company.week, year: game.company.year, category, message });
+    addDevLog('finance', `fillRate=${(result.fillRate * 100).toFixed(1)}% attendance=${result.attendance}/${result.venue.capacity} venue=${result.venue.name}${result.venue.crowdLean ? ` (${result.venue.crowdLean} crowd, company style=${game.company.style})` : ''}`);
+    addDevLog('reputation', `repDelta=${result.repDelta} from avgStars=${result.avgStars.toFixed(2)} fillRate=${(result.fillRate * 100).toFixed(1)}% avgPromoPop=${Math.round(result.avgPromoPop)}${result.crowdVerdict ? ` crowdVerdict=${result.crowdVerdict}` : ''}`);
 
     result.matchResults.forEach((m) => {
       m.participantIds.forEach((pid) => {
@@ -2949,6 +2989,7 @@ export default function WrestlingGM() {
       const recap = generateMonthlyRecap(recapSlice, stillRoster, monthNum, game.company.year, game.company.journalists, nextRivalsWithSignings);
       nextMediaRecaps = [recap, ...game.mediaRecaps].slice(0, 24);
       newsEntries.push(`Wrestling media has published its Month ${monthNum} recap.`);
+      (recap.press || []).forEach((p) => addDevLog('journalist', `${p.name} (${p.title}) said: "${p.take}"`));
     }
 
     const nextReputation = clamp(Math.round(game.company.reputation + result.repDelta + stableRepBonus + feudRepBonus - wellnessRepPenalty + rivalRepTrickle), 0, 100);
@@ -2995,6 +3036,7 @@ export default function WrestlingGM() {
       feuds: nextFeuds,
       relationships: nextRelationships,
       inbox: nextInbox,
+      devLog: [...devLogAdds.map((d) => ({ ...d })).reverse(), ...(game.devLog || [])].slice(0, 60),
       rivals: nextRivalsWithSignings,
       mediaRecaps: nextMediaRecaps,
       history: [historyEntry, ...game.history].slice(0, 60),
@@ -3202,6 +3244,9 @@ export default function WrestlingGM() {
               {setupThemeMode !== 'custom' && <div className="mb-3" />}
 
               <PrimaryButton full onClick={startNewGame} disabled={!setupName.trim()}>Open For Business</PrimaryButton>
+              <button onClick={startDebugTestGame} className="wgm-mono text-[9px] underline mt-3 block mx-auto" style={{ color: 'rgba(246,240,225,0.35)' }}>
+                Skip setup — start a fixed debug test save
+              </button>
             </div>
           )}
         </div>
@@ -3238,7 +3283,12 @@ export default function WrestlingGM() {
             <h1 className="wgm-display text-xl leading-tight" style={{ color: C.cream }}>{company.name}</h1>
           </div>
           <div className="text-right">
-            <p className="wgm-mono text-[10px]" style={{ color: 'rgba(246,240,225,0.55)' }}>WEEK {company.week} · YR {company.year}</p>
+            <div className="flex items-center justify-end gap-2">
+              <button onClick={() => setDevLogModalOpen(true)} className="opacity-40" aria-label="Developer log">
+                <Bug size={12} color="rgba(246,240,225,0.6)" />
+              </button>
+              <p className="wgm-mono text-[10px]" style={{ color: 'rgba(246,240,225,0.55)' }}>WEEK {company.week} · YR {company.year}</p>
+            </div>
             <p className="wgm-display text-lg" style={{ color: company.funds < 0 ? C.rope : C.gold }}>{money(company.funds)}</p>
           </div>
         </div>
@@ -3432,6 +3482,11 @@ export default function WrestlingGM() {
       {/* Inbox */}
       {inboxModalOpen && (
         <InboxModal inbox={game.inbox || []} company={company} onClose={() => setInboxModalOpen(false)} onRespond={respondToInboxOffer} />
+      )}
+
+      {/* Developer log */}
+      {devLogModalOpen && (
+        <DevLogModal devLog={game.devLog || []} onClose={() => setDevLogModalOpen(false)} />
       )}
 
       {/* Promo builder */}
@@ -5757,6 +5812,24 @@ function TvDealSection({ company, onSign }) {
 /* ============================================================
    RIVAL PROMOTIONS MODAL
    ============================================================ */
+function DevLogModal({ devLog, onClose }) {
+  const CATEGORY_COLOR = { finance: C.good, reputation: C.gold, journalist: C.steel };
+  return (
+    <Modal title="Developer Log" onClose={onClose} wide>
+      <p className="text-xs mb-3" style={{ color: C.inkFaint }}>The raw reasoning behind recent simulation results — for spotting bugs, not for playing the game. Most recent first.</p>
+      {devLog.length === 0 && <EmptyState text="No log entries yet. Run a show to generate some." />}
+      <div className="space-y-1.5 max-h-96 overflow-y-auto wgm-scrollbar">
+        {devLog.map((d, i) => (
+          <div key={i} className="rounded-md p-2" style={{ backgroundColor: C.canvasAlt, borderLeft: `3px solid ${CATEGORY_COLOR[d.category] || C.inkFaint}` }}>
+            <p className="wgm-mono text-[8px] font-bold mb-0.5" style={{ color: C.inkFaint }}>WEEK {d.week}, YEAR {d.year} · {d.category.toUpperCase()}</p>
+            <p className="wgm-mono text-[10px]" style={{ color: C.ink }}>{d.message}</p>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
 function InboxModal({ inbox, company, onClose, onRespond }) {
   return (
     <Modal title="Inbox" onClose={onClose} wide>
