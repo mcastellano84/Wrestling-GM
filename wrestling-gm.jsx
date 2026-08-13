@@ -1323,11 +1323,17 @@ const JOURNALIST_LEANS = [
 function generateJournalists(regionId) {
   return JOURNALIST_LEANS.map((lean) => ({ name: generateAdvisorName(regionId), leanId: lean.id, title: lean.title }));
 }
-function journalistTake(leanId, recap, rivals) {
+function journalistTake(leanId, recap, rivals, worldEvents) {
   const sortedRivals = (rivals || []).slice().sort((a, b) => b.reputation - a.reputation);
   const topRival = sortedRivals[0] || null;
   const hotRival = (rivals || []).find((r) => r.momentum >= 2);
   const decliningRival = (rivals || []).find((r) => r.momentum <= -2);
+  const events = worldEvents || [];
+  const poaches = events.filter((e) => e.type === 'poach');
+  const consolidations = events.filter((e) => e.type === 'consolidation');
+  const launches = events.filter((e) => e.type === 'launch');
+  const ups = events.filter((e) => e.type === 'flavor_up');
+  const downs = events.filter((e) => e.type === 'flavor_down');
   const candidates = [];
 
   if (leanId === 'technical') {
@@ -1336,17 +1342,24 @@ function journalistTake(leanId, recap, rivals) {
     if (recap.avgStars >= 3.5) candidates.push(`Solid fundamentals across the board this month. A ${recap.avgStars.toFixed(1)}★ average speaks for itself.`);
     if (recap.avgStars < 2.5) candidates.push(`The in-ring product needs work. A ${recap.avgStars.toFixed(1)}★ average won't win over the hardcore fans who actually watch the wrestling.`);
     if (topRival) candidates.push(`For my money, ${topRival.name} is putting on the more consistent product across the industry right now.`);
+    if (ups.length) candidates.push(`${pick(ups).text} That's the kind of buzz that builds a reputation the right way.`);
+    if (launches.length) candidates.push(`A new name entered the business this month — ${pick(launches).text} Time will tell if they last.`);
     if (!candidates.length) candidates.push(`A quiet month for the purists. Nothing that'll make a highlight reel, nothing that hurt either.`);
   } else if (leanId === 'hardcore') {
     if (recap.shows === 0) return `A whole month with no shows? Fans forget you exist if you don't give them something.`;
     if (recap.topMatch && recap.topMatch.stars >= 4.5) candidates.push(`${recap.topMatch.label} was the kind of chaos I live for. ${recap.topMatch.stars}★, no notes.`);
     if (recap.titleChanges.length) candidates.push(`Gold changed hands this month and the crowd ate it up. More of this, less standing around.`);
     if (hotRival) candidates.push(`${hotRival.name} is on an absolute tear lately. Somebody in this business better answer that.`);
+    if (consolidations.length) candidates.push(`${pick(consolidations).text} That's the business getting real. Not everybody survives out there.`);
     if (recap.shows <= 1) candidates.push(`One show all month? Fans need chaos more often than that.`);
     if (!candidates.length) candidates.push(`Nothing broke, nothing bled. Forgettable month if you ask me.`);
   } else if (leanId === 'rumors') {
     if (recap.titleChanges.length) candidates.push(`Word is ${recap.titleChanges[0].winner} winning the ${recap.titleChanges[0].titleName} wasn't universally popular backstage. Keep an eye on that locker room.`);
+    if (poaches.length) candidates.push(`${pick(poaches).text} Wonder what that signing bonus looked like.`);
+    if (consolidations.length) candidates.push(`Big news out of the business this month: ${pick(consolidations).text}`);
+    if (launches.length) candidates.push(`${pick(launches).text} Every promotion starts somewhere — worth keeping an eye on.`);
     if (decliningRival) candidates.push(`Hearing things are getting shaky over at ${decliningRival.name}. Wouldn't be shocked if some of their talent starts making calls.`);
+    if (downs.length) candidates.push(`${pick(downs).text} Backstage sources say it's worse than they're letting on.`);
     if (topRival && topRival.reputation >= 60) candidates.push(`${topRival.name} is the promotion everybody in this business is talking about right now. Reputation like that doesn't happen by accident.`);
     if (recap.powerRankings.length) candidates.push(`${recap.powerRankings[0].name} is the hottest name in the building right now. Don't be shocked if a rival comes calling.`);
     if (recap.totalProfit < 0) candidates.push(`Hearing the books were red this month. How long can that go on before something gives?`);
@@ -1379,7 +1392,7 @@ function letterGradeColor(grade) {
   if (grade.startsWith('C')) return C.goldSoft;
   return C.rope;
 }
-function generateMonthlyRecap(slice, roster, monthNum, year, journalists, rivals) {
+function generateMonthlyRecap(slice, roster, monthNum, year, journalists, rivals, worldEvents) {
   const shows = slice.length;
   const avgStars = shows ? average(slice.map((h) => h.avgStars)) : 0;
   const totalAttendance = sum(slice.map((h) => h.attendance));
@@ -1396,7 +1409,9 @@ function generateMonthlyRecap(slice, roster, monthNum, year, journalists, rivals
     titleChanges, powerRankings,
   };
   recap.grade = shows ? showLetterGrade({ attendance: totalAttendance, capacity: sum(slice.map((h) => h.capacity)), avgStars, netProfit: totalProfit }) : null;
-  recap.press = (journalists || []).map((j) => ({ name: j.name, title: j.title, take: journalistTake(j.leanId, recap, rivals) }));
+  const windowStart = monthNum * 4 - 3;
+  const worldEventsSlice = (worldEvents || []).filter((e) => e.year === year && e.week >= windowStart && e.week <= monthNum * 4);
+  recap.press = (journalists || []).map((j) => ({ name: j.name, title: j.title, take: journalistTake(j.leanId, recap, rivals, worldEventsSlice) }));
   return recap;
 }
 
@@ -1666,6 +1681,7 @@ function createNewGame(opts) {
     rivals: generateRivalPromotions(rivalCount),
     mediaRecaps: [],
     devLog: [],
+    worldEvents: [],
     history: [],
     news: [`Welcome to ${regionLabel}. Booking in the ${styleLabel} tradition — you've got ${believer.name}, a ring, and a dream. Go find the rest of your roster.`, `Your ring: ${ringOrigin.label.toLowerCase()}. ${ringOrigin.blurb}`, background.blurb],
     draftShow: makeEmptyDraft(),
@@ -1721,6 +1737,7 @@ function normalizeGame(loaded) {
     rivals: loaded.rivals || generateRivalPromotions(),
     mediaRecaps: loaded.mediaRecaps || [],
     devLog: loaded.devLog || [],
+    worldEvents: loaded.worldEvents || [],
     roster: (loaded.roster || []).map(fixWrestler),
     freeAgents: (loaded.freeAgents || []).map(fixWrestler),
     staff: {
@@ -2699,6 +2716,7 @@ export default function WrestlingGM() {
     }
 
     const rivalNews = [];
+    const worldEventAdds = [];
     let rivalRepTrickle = 0;
     let nextRivals = game.rivals.map((rival) => {
       const ticked = tickRivalPromotion(rival);
@@ -2708,21 +2726,33 @@ export default function WrestlingGM() {
         const target = pick(freeAgents);
         freeAgents = freeAgents.filter((w) => w.id !== target.id);
         rivalNews.push(`${ticked.name} signed free agent ${target.name}.`);
+        worldEventAdds.push({ type: 'poach', week: game.company.week, year: game.company.year, rivalName: ticked.name, targetName: target.name, text: `${ticked.name} signed free agent ${target.name}.` });
       } else if (Math.random() < 0.2) {
-        const flavor = ticked.momentum >= 0 ? pick(RIVAL_FLAVOR_UP) : pick(RIVAL_FLAVOR_DOWN);
+        const isUp = ticked.momentum >= 0;
+        const flavor = isUp ? pick(RIVAL_FLAVOR_UP) : pick(RIVAL_FLAVOR_DOWN);
         rivalNews.push(`${ticked.name} ${flavor}.`);
+        worldEventAdds.push({ type: isUp ? 'flavor_up' : 'flavor_down', week: game.company.week, year: game.company.year, rivalName: ticked.name, text: `${ticked.name} ${flavor}.` });
       }
       return ticked;
     });
     const consolidation = processRivalConsolidation(nextRivals);
     nextRivals = consolidation.rivals;
-    consolidation.news.forEach((n) => rivalNews.push(n));
+    consolidation.news.forEach((n) => {
+      rivalNews.push(n);
+      worldEventAdds.push({ type: n.startsWith('A new promotion') ? 'launch' : 'consolidation', week: game.company.week, year: game.company.year, text: n });
+    });
 
     let nextInbox = (game.inbox || []).filter((o) => !(game.company.year > o.expiresYear || (game.company.year === o.expiresYear && game.company.week > o.expiresWeek)));
     const newOffer = maybeGenerateRivalOffer(game.company, stillRoster, nextRivals, nextInbox);
     if (newOffer) {
       nextInbox = [...nextInbox, newOffer];
       rivalNews.push(`New offer in your inbox: ${newOffer.text}`);
+    }
+
+    if (freeAgents.length < 20 && Math.random() < 0.3) {
+      const fresh = generateWrestler('Rookie', game.company.region, game.company.style);
+      freeAgents = [...freeAgents, fresh];
+      rivalNews.push(`New face on the free agent market: ${fresh.name}, fresh off the local scene.`);
     }
 
     let nextTagTeams = game.tagTeams
@@ -2986,7 +3016,7 @@ export default function WrestlingGM() {
       const sliceStart = game.company.week - 3;
       const recapSlice = [historyEntry, ...game.history].filter((h) => h.year === game.company.year && h.week >= sliceStart && h.week <= game.company.week);
       const monthNum = Math.ceil(game.company.week / 4);
-      const recap = generateMonthlyRecap(recapSlice, stillRoster, monthNum, game.company.year, game.company.journalists, nextRivalsWithSignings);
+      const recap = generateMonthlyRecap(recapSlice, stillRoster, monthNum, game.company.year, game.company.journalists, nextRivalsWithSignings, [...worldEventAdds, ...(game.worldEvents || [])]);
       nextMediaRecaps = [recap, ...game.mediaRecaps].slice(0, 24);
       newsEntries.push(`Wrestling media has published its Month ${monthNum} recap.`);
       (recap.press || []).forEach((p) => addDevLog('journalist', `${p.name} (${p.title}) said: "${p.take}"`));
@@ -3037,6 +3067,7 @@ export default function WrestlingGM() {
       relationships: nextRelationships,
       inbox: nextInbox,
       devLog: [...devLogAdds.map((d) => ({ ...d })).reverse(), ...(game.devLog || [])].slice(0, 60),
+      worldEvents: [...worldEventAdds, ...(game.worldEvents || [])].slice(0, 120),
       rivals: nextRivalsWithSignings,
       mediaRecaps: nextMediaRecaps,
       history: [historyEntry, ...game.history].slice(0, 60),
