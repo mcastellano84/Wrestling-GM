@@ -333,6 +333,38 @@ const BOSS_BACKGROUNDS = [
   { id: 'investor', label: 'Outside Investor', blurb: "You've never taken a bump in your life, but you've got the capital to make things happen.", fundsMod: 5000, repMod: -5, bossRepMod: 0 },
   { id: 'family', label: 'Family Business', blurb: 'You inherited this promotion. The roster already knows your name — for better or worse.', fundsMod: 0, repMod: 0, bossRepMod: 8 },
 ];
+const PARTNER_ARCHETYPES = [
+  { id: 'believer', label: 'The True Believer', dream: 'Wants to build something that outlasts both of you — a real territory, not a hustle.', bias: 'ambitious' },
+  { id: 'operator', label: 'The Operator', dream: "Wants a tightly run business first and a wrestling promotion second. Doesn't want to see money wasted.", bias: 'frugal' },
+  { id: 'promoter', label: 'The Old-School Promoter', dream: 'Wants to prove the territory system still works, the way it used to be done.', bias: 'traditional' },
+];
+function generatePartner(regionId) {
+  const archetype = pick(PARTNER_ARCHETYPES);
+  return { name: generateAdvisorName(regionId), archetypeId: archetype.id, label: archetype.label, dream: archetype.dream, bias: archetype.bias, bond: 55 };
+}
+function partnerReaction(archetypeId, category, choiceId, delegated) {
+  const lines = {
+    believer: {
+      venue: { backyard: "This is beneath us, but I get it — everyone starts somewhere.", gym_rental: "A real room. Good. People need to see we're serious.", warehouse_lease: "Now we're talking. This is the kind of move that builds something real." },
+      ring: { found: "It's ugly, but it'll do for now. We won't be here long.", used: "Solid. Not flashy, but it holds up.", new: "This is an investment in the future, not just tonight." },
+      recruiting: { magazine_ad: "Old-fashioned, but it works — people still read those.", social_media: "Smart. Meet people where they already are.", in_person: "I like that you went and looked yourself. Shows commitment.", delegate: "I won't let you down. I know exactly who we need." },
+    },
+    operator: {
+      venue: { backyard: "Free is free. We'll upgrade when the books say we can.", gym_rental: "Reasonable. Doesn't blow the budget.", warehouse_lease: "That's a lot of overhead for week one. I hope you know what you're doing." },
+      ring: { found: "Zero cost. That's the right call before we've made a dime.", used: "Good value. No reason to overspend this early.", new: "That's real money for something we haven't even used yet." },
+      recruiting: { magazine_ad: "Costs money for a maybe. I'd have gone cheaper.", social_media: "Cheap and it reaches people. Efficient.", in_person: "Costs nothing but your time. Can't argue with that.", delegate: "I'll find someone within budget. You have my word." },
+    },
+    promoter: {
+      venue: { backyard: "This is how it used to be done. Nothing wrong with paying your dues.", gym_rental: "The gym circuit built half the legends in this business.", warehouse_lease: "A permanent building, huh. Big step. Territories were built on less." },
+      ring: { found: "A found ring has more stories in it than a new one ever will.", used: "Somebody else's sweat is already in those ropes. That's tradition.", new: "Brand new. Never held. We'll break it in right." },
+      recruiting: { magazine_ad: "Classic. That's how we all got found, back in the day.", social_media: "Not how I'd have done it, but the business changes.", in_person: "Word of mouth and a firm handshake. That's how you find real ones.", delegate: "Trust goes both ways in this business. I'll take care of it." },
+    },
+  };
+  const set = lines[archetypeId] && lines[archetypeId][category];
+  if (!set) return '';
+  const base = set[choiceId] || '';
+  return delegated ? `${base} (I made the call on this one, like you asked.)` : base;
+}
 const DIFFICULTY_CONFIG = {
   easy: { id: 'easy', label: 'Easy', expenseMult: 0.85, revenueMult: 1.1, blurb: 'Lower costs, friendlier crowds.' },
   normal: { id: 'normal', label: 'Normal', expenseMult: 1, revenueMult: 1, blurb: 'The standard experience.' },
@@ -394,6 +426,22 @@ const RING_ORIGINS = [
   { id: 'used', label: 'Bought Used', blurb: 'A retired indie promotion sold you their old ring for cheap.', cost: 1200, ringLevel: 2 },
   { id: 'new', label: 'Bought New', blurb: 'Brand new, built to spec. Costs real money, but it shows.', cost: 3500, ringLevel: 3 },
 ];
+const STARTUP_VENUE_PATHS = [
+  { id: 'backyard', label: 'Backyard Shows', cost: 0, repBonus: 0, blurb: "Free, and nobody's watching yet. You build an audience one lawn chair at a time." },
+  { id: 'gym_rental', label: 'Rent the School Gym', cost: 400, repBonus: 2, blurb: 'A real room with real folding chairs. Costs something, but people take you a little more seriously.' },
+  { id: 'warehouse_lease', label: 'Lease a Warehouse', cost: 1800, repBonus: 5, blurb: "Your own space — four walls and a roof. Real overhead, but it's yours from day one." },
+];
+const STARTUP_RECRUITING_METHODS = [
+  { id: 'magazine_ad', label: 'Wrestling Magazine Ad', cost: 150, statBias: null },
+  { id: 'social_media', label: 'Social Media Post', cost: 50, statBias: 'charisma' },
+  { id: 'in_person', label: 'Went Looking In Person', cost: 0, statBias: 'strength' },
+  { id: 'delegate', label: 'Delegate to Partner', cost: 0, statBias: null, isDelegate: true },
+];
+const PARTNER_DELEGATE_PICK = {
+  believer: { venue: 'warehouse_lease', ring: 'new', recruiting: 'social_media' },
+  operator: { venue: 'backyard', ring: 'found', recruiting: 'in_person' },
+  promoter: { venue: 'gym_rental', ring: 'found', recruiting: 'magazine_ad' },
+};
 const WEEK_DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 function ringConditionMult(condition) {
   return { injuryMult: clamp(1.4 - condition / 130, 0.85, 1.4), qualityBonus: clamp((condition - 60) / 400, -0.15, 0.1) };
@@ -607,7 +655,10 @@ function evolveWrestlerTraits(w, ctx) {
   if (w.careerInjuries >= 5) add('injury_prone', `${w.name} has developed a chronic Injury Prone reputation.`);
   if (unhappyStreak >= 12) add('backstage_politician', `${w.name} has grown bitter and started acting as a Backstage Politician.`);
   if (contentStreak >= 20) add('company_man', `${w.name} has become a true Company Man after years of loyalty.`);
-  if (w.matchesWrestled >= 40 && w.morale >= 80) add('locker_leader', `${w.name} has become a respected Locker Room Leader.`);
+  if (w.matchesWrestled >= 40 && w.morale >= 80) {
+    const inclined = w.character && (w.character.values.includes('loyalty') || w.character.values.includes('service') || (w.character.dimensions && w.character.dimensions.sociability >= 65) || (w.character.dimensions && w.character.dimensions.empathy >= 65));
+    if (inclined || w.matchesWrestled >= 55) add('locker_leader', `${w.name} has become a respected Locker Room Leader.`);
+  }
   if (w.popularity >= 78) add('fan_favorite', `${w.name} has become a bona fide Fan Favorite.`);
   if (w.popularity >= 78) add('difficult', `${w.name}'s rising stardom has made them more Difficult to deal with.`);
   if (w.popularity >= 65 && !holdsTitle) add('prima_donna', `${w.name} is chasing gold and picking up a Prima Donna reputation in the meantime.`);
@@ -725,6 +776,104 @@ function assignAmbition(pool, roster, selfId) {
 const assignWrestlerAmbition = () => assignAmbition(WRESTLER_AMBITIONS.filter((a) => a.type !== 'beat_rival'), null, null);
 const assignStaffAmbition = () => assignAmbition(STAFF_AMBITIONS, null, null);
 
+/* ============================================================
+   CHARACTER CORE v1 — the minimum viable human model.
+   Needs/Values/Dimensions/Background are deliberately a small,
+   controlled vocabulary (not a personality test) and are compact
+   to generate — every wrestler gets one, not just "important"
+   characters, since the exit test requires five equally skilled
+   rookies to feel different from each other.
+
+   These numbers are intentionally never shown raw in the UI —
+   characterReadout() turns them into the 1-2 human sentences that
+   are actually surfaced. See WrestlerModal's "About" section.
+   ============================================================ */
+const CORE_NEEDS = ['purpose', 'belonging', 'recognition', 'security', 'freedom', 'mastery', 'adventure', 'legacy'];
+const CORE_VALUES = ['family', 'money', 'loyalty', 'honor', 'fame', 'competition', 'creativity', 'service'];
+const BEHAVIORAL_DIMENSIONS = ['patience', 'sociability', 'riskTolerance', 'emotionalOpenness', 'competitiveness', 'empathy'];
+const CHILDHOOD_BACKGROUNDS = [
+  'grew up in a tight-knit family that showed up for everything',
+  'grew up mostly looking after themselves',
+  'grew up moving from town to town',
+  'grew up in a house that lived and breathed wrestling',
+  'grew up with a parent who wanted nothing to do with this business',
+  'grew up the odd one out, wrestling was the first thing that ever fit',
+];
+const FINANCIAL_BACKGROUNDS = [
+  'grew up with money to spare',
+  'grew up scraping by',
+  'grew up comfortable, never rich',
+  'grew up watching their family struggle to make rent',
+];
+const WRESTLING_PATHS = [
+  'fell in love with it watching TV as a kid',
+  'was pushed into it by a family member already in the business',
+  'stumbled into it after a dare',
+  'trained for years in a backyard before ever stepping in a real ring',
+  'came over from another sport looking for something rawer',
+  'walked into a local promotion on a whim and never left',
+];
+const DEFINING_MEMORIES = [
+  'the first time they heard a crowd pop for them',
+  'watching someone they looked up to get released without warning',
+  'a locker room that took them in when they had nothing',
+  'an injury that nearly ended things before they\u2019d started',
+  'the night they finally earned their family\u2019s respect',
+  'being told by someone who mattered that they\u2019d never make it',
+];
+function pickN(list, n) {
+  const pool = [...list];
+  const out = [];
+  for (let i = 0; i < n && pool.length; i++) out.push(pool.splice(randInt(0, pool.length - 1), 1)[0]);
+  return out;
+}
+function generateCharacterCore() {
+  const needs = pickN(CORE_NEEDS, 3);
+  const values = pickN(CORE_VALUES, randInt(2, 3));
+  const dimensions = {};
+  BEHAVIORAL_DIMENSIONS.forEach((d) => { dimensions[d] = randInt(15, 90); });
+  const background = {
+    childhood: pick(CHILDHOOD_BACKGROUNDS),
+    financial: pick(FINANCIAL_BACKGROUNDS),
+    path: pick(WRESTLING_PATHS),
+    memory: pick(DEFINING_MEMORIES),
+  };
+  const lifetimeDream = pick(LIFETIME_DREAMS);
+  return { needs, values, dimensions, background, lifetimeDream };
+}
+const LIFETIME_DREAMS = [
+  'To main event the biggest show this business has ever put on.',
+  'To be remembered as the one who changed how this business is done.',
+  'To build a life secure enough that their family never has to worry again.',
+  'To prove everyone who doubted them wrong, once and for all.',
+  'To pass on everything they know to the next generation before it\u2019s too late.',
+  'To never have to depend on anyone else again.',
+  'To belong to something bigger than themselves.',
+];
+function characterReadout(character) {
+  if (!character) return '';
+  const needLabel = { purpose: 'a sense of purpose', belonging: 'belonging somewhere', recognition: 'being recognized', security: 'security', freedom: 'freedom', mastery: 'mastering their craft', adventure: 'chasing the next thing', legacy: 'leaving something behind' };
+  const valueLabel = { family: 'family', money: 'money', loyalty: 'loyalty', honor: 'honor', fame: 'fame', competition: 'competition', creativity: 'creative freedom', service: 'being useful to others' };
+  const topNeed = character.needs[0];
+  const topValue = character.values[0];
+  const d = character.dimensions;
+  const dimNotes = [];
+  if (d.riskTolerance >= 70) dimNotes.push('takes chances most people wouldn\u2019t');
+  else if (d.riskTolerance <= 30) dimNotes.push('plays it careful');
+  if (d.sociability >= 70) dimNotes.push('is at ease in a crowded locker room');
+  else if (d.sociability <= 30) dimNotes.push('keeps mostly to themselves');
+  if (d.competitiveness >= 75) dimNotes.push('hates losing more than they love winning');
+  if (d.empathy >= 75) dimNotes.push('genuinely looks out for the people around them');
+  if (d.patience <= 25) dimNotes.push('wants results now, not eventually');
+  const dimLine = dimNotes.length ? ` They ${pick(dimNotes)}.` : '';
+  return `Driven mostly by a need for ${needLabel[topNeed] || topNeed}. Values ${valueLabel[topValue] || topValue} above almost everything else.${dimLine}`;
+}
+function backgroundSummary(character) {
+  if (!character || !character.background) return '';
+  const b = character.background;
+  return `They ${b.childhood}, ${b.financial}, and ${b.path}. What stays with them most: ${b.memory}.`;
+}
+
 function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainment') {
   const cfg = TIER_CONFIG[tier];
   const style = STYLE_CONFIG[styleId] || STYLE_CONFIG.sports_entertainment;
@@ -766,6 +915,7 @@ function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainmen
     hometown: pick(REGION_HOMETOWNS[regionId] || REGION_HOMETOWNS.usa),
     weight: clamp(180 + Math.round((stats.strength / 99) * 130) + randInt(-15, 15), 175, 340),
     contractPromise: null,
+    character: generateCharacterCore(),
   };
 }
 
@@ -1046,7 +1196,7 @@ function tickAmbition(subject, amb, fulfilled, pool, roster) {
   } else if (satisfaction < 40 && status === 'content') {
     status = 'unhappy';
     pendingRequest = { text: `Wants meaningful progress toward: ${amb.label}.` };
-    news = `${subject.name} has voiced frustration about their career direction.`;
+    news = `${subject.name} wants to talk. They're unhappy about their career direction — check the Roster.`;
   } else if (satisfaction >= 40) {
     status = 'content'; pendingRequest = null;
   }
@@ -1079,15 +1229,25 @@ function generateRivalPromotions(count = 5) {
     let name = generatePromotionName();
     while (usedNames.has(name)) name = generatePromotionName();
     usedNames.add(name);
+    const region = pick(REGION_LIST).id;
+    const style = pick(STYLE_LIST).id;
+    const reputation = randInt(10, 55);
     return {
       id: uid(),
       name,
-      region: pick(REGION_LIST).id,
-      style: pick(STYLE_LIST).id,
-      reputation: randInt(10, 55),
+      region, style, reputation,
       momentum: randInt(-1, 1),
       relationship: 'neutral',
+      flagshipTalent: generateFlagshipTalent(region, style, reputation),
     };
+  });
+}
+function generateFlagshipTalent(region, style, reputation) {
+  const count = reputation >= 55 ? 2 : 1;
+  return Array.from({ length: count }, () => {
+    const tier = reputation >= 55 ? 'Star' : reputation >= 30 ? 'Mid-Card' : 'Rookie';
+    const w = generateWrestler(tier, region, style);
+    return { name: w.name, gimmick: w.gimmick, popularity: w.popularity };
   });
 }
 
@@ -1235,14 +1395,15 @@ function processRivalConsolidation(rivals) {
       if (targets.length) {
         const target = [...targets].sort((a, b) => a.reputation - b.reputation)[0];
         news.push(`${acquirer.name} has acquired ${target.name}, absorbing their operation.`);
-        list = list.filter((r) => r.id !== target.id).map((r) => (r.id === acquirer.id ? { ...r, reputation: clamp(r.reputation + Math.round(target.reputation / 3), 0, 98) } : r));
+        list = list.filter((r) => r.id !== target.id).map((r) => (r.id === acquirer.id ? { ...r, reputation: clamp(r.reputation + Math.round(target.reputation / 3), 0, 98), flagshipTalent: [...(r.flagshipTalent || []), ...(target.flagshipTalent || [])].slice(0, 3) } : r));
       }
     }
   });
   if (list.length < 3 && Math.random() < 0.3) {
     let name = generatePromotionName();
     while (list.some((r) => r.name === name)) name = generatePromotionName();
-    list = [...list, { id: uid(), name, region: pick(REGION_LIST).id, style: pick(STYLE_LIST).id, reputation: randInt(8, 20), momentum: randInt(-1, 1), relationship: 'neutral' }];
+    const region = pick(REGION_LIST).id; const style = pick(STYLE_LIST).id; const reputation = randInt(8, 20);
+    list = [...list, { id: uid(), name, region, style, reputation, momentum: randInt(-1, 1), relationship: 'neutral', flagshipTalent: generateFlagshipTalent(region, style, reputation) }];
     news.push(`A new promotion, ${name}, has launched.`);
   }
   return { rivals: list, news };
@@ -1361,7 +1522,10 @@ function journalistTake(leanId, recap, rivals, worldEvents) {
     if (decliningRival) candidates.push(`Hearing things are getting shaky over at ${decliningRival.name}. Wouldn't be shocked if some of their talent starts making calls.`);
     if (downs.length) candidates.push(`${pick(downs).text} Backstage sources say it's worse than they're letting on.`);
     if (topRival && topRival.reputation >= 60) candidates.push(`${topRival.name} is the promotion everybody in this business is talking about right now. Reputation like that doesn't happen by accident.`);
-    if (recap.powerRankings.length) candidates.push(`${recap.powerRankings[0].name} is the hottest name in the building right now. Don't be shocked if a rival comes calling.`);
+    if (recap.powerRankings.length) {
+      const top = recap.powerRankings[0];
+      candidates.push(top.promotion ? `${top.name} over at ${top.promotion} is the hottest name in the business right now.` : `${top.name} is the hottest name in the building right now. Don't be shocked if a rival comes calling.`);
+    }
     if (recap.totalProfit < 0) candidates.push(`Hearing the books were red this month. How long can that go on before something gives?`);
     if (!candidates.length) candidates.push(`Quiet on the rumor mill this month — which almost never means nothing's happening.`);
   }
@@ -1401,7 +1565,9 @@ function generateMonthlyRecap(slice, roster, monthNum, year, journalists, rivals
   const allMatches = slice.flatMap((h) => h.matches.map((m) => ({ ...m, week: h.week })));
   const topMatch = allMatches.length ? allMatches.reduce((best, m) => (m.stars > best.stars ? m : best), allMatches[0]) : null;
   const titleChanges = allMatches.filter((m) => m.titleChanged).map((m) => ({ label: m.label, titleName: m.titleName, winner: m.winner, week: m.week }));
-  const powerRankings = [...roster].sort((a, b) => b.popularity - a.popularity).slice(0, 5).map((w) => ({ id: w.id, name: w.name, popularity: w.popularity, gimmick: w.gimmick }));
+  const ownEntries = roster.map((w) => ({ id: w.id, name: w.name, popularity: w.popularity, gimmick: w.gimmick, promotion: null }));
+  const rivalEntries = (rivals || []).flatMap((r) => (r.flagshipTalent || []).map((t) => ({ id: null, name: t.name, popularity: t.popularity, gimmick: t.gimmick, promotion: r.name })));
+  const powerRankings = [...ownEntries, ...rivalEntries].sort((a, b) => b.popularity - a.popularity).slice(0, 5);
   const recap = {
     id: uid(), month: monthNum, year, shows,
     avgStars: Number(avgStars.toFixed(2)), totalAttendance, totalRevenue, totalProfit,
@@ -1629,7 +1795,13 @@ const MARKETING_TIERS = [
 ];
 
 function createNewGame(opts) {
-  const { name, regionId, styleId, rivalCount = 5, fundsTierId = 'standard', difficultyId = 'normal', theme, backgroundId = 'family', ringOriginId = 'found' } = opts || {};
+  const {
+    name, regionId, styleId, rivalCount = 5, fundsTierId = 'standard', difficultyId = 'normal', theme, backgroundId = 'family',
+    ringOriginId = 'found', ringDelegated = false,
+    venuePathId = 'gym_rental', venueDelegated = false,
+    recruitingMethodId = 'in_person', recruitingDelegated = false,
+    partner: providedPartner,
+  } = opts || {};
   const region = regionId || 'usa';
   const style = styleId || 'sports_entertainment';
   const styleLabel = (STYLE_CONFIG[style] || STYLE_CONFIG.sports_entertainment).label;
@@ -1637,16 +1809,43 @@ function createNewGame(opts) {
   const fundsTier = FUNDS_TIERS.find((f) => f.id === fundsTierId) || FUNDS_TIERS[1];
   const resolvedTheme = theme || DEFAULT_THEME;
   const background = BOSS_BACKGROUNDS.find((b) => b.id === backgroundId) || BOSS_BACKGROUNDS[2];
-  const ringOrigin = RING_ORIGINS.find((r) => r.id === ringOriginId) || RING_ORIGINS[0];
+
+  const partner = providedPartner || generatePartner(region);
+  const delegatePicks = PARTNER_DELEGATE_PICK[partner.archetypeId];
+  const isRecruitingDelegated = recruitingDelegated || recruitingMethodId === 'delegate';
+  const resolvedRingOriginId = ringDelegated ? delegatePicks.ring : ringOriginId;
+  const resolvedVenuePathId = venueDelegated ? delegatePicks.venue : venuePathId;
+  const resolvedRecruitingId = isRecruitingDelegated ? delegatePicks.recruiting : recruitingMethodId;
+
+  const ringOrigin = RING_ORIGINS.find((r) => r.id === resolvedRingOriginId) || RING_ORIGINS[0];
+  const venuePath = STARTUP_VENUE_PATHS.find((v) => v.id === resolvedVenuePathId) || STARTUP_VENUE_PATHS[0];
+  const recruitingMethod = STARTUP_RECRUITING_METHODS.find((m) => m.id === resolvedRecruitingId) || STARTUP_RECRUITING_METHODS[2];
+
   const believer = generateWrestler('Rookie', region, style);
-  const startingRoster = [{ ...believer, storyline: [{ week: 1, year: 1, text: 'Believed in this promotion from day one.' }] }];
-  const startingFunds = Math.max(500, fundsTier.funds + background.fundsMod - ringOrigin.cost);
+  if (recruitingMethod.statBias) believer.stats[recruitingMethod.statBias] = clamp(believer.stats[recruitingMethod.statBias] + 15, 5, 99);
+  const startingRoster = [{ ...believer, storyline: [{ week: 1, year: 1, text: `Found via ${recruitingMethod.label.toLowerCase()} and believed in this promotion from day one.` }] }];
+
+  const bondBonus = (venueDelegated ? 8 : 0) + (ringDelegated ? 8 : 0) + (isRecruitingDelegated ? 8 : 0);
+  const finalPartner = { ...partner, bond: clamp(partner.bond + bondBonus, 0, 100) };
+
+  const startingFunds = Math.max(500, fundsTier.funds + background.fundsMod - ringOrigin.cost - venuePath.cost - recruitingMethod.cost);
+  const startingRep = clamp(5 + background.repMod + venuePath.repBonus, 0, 100);
+
+  const openingNews = [
+    `Welcome to ${regionLabel}. Booking in the ${styleLabel} tradition — you've got ${believer.name}, a ring, and a dream. Go find the rest of your roster.`,
+    `${finalPartner.name} on the venue: "${partnerReaction(finalPartner.archetypeId, 'venue', resolvedVenuePathId, venueDelegated)}"`,
+    `${finalPartner.name} on the ring: "${partnerReaction(finalPartner.archetypeId, 'ring', resolvedRingOriginId, ringDelegated)}"`,
+    `${finalPartner.name} on ${believer.name}: "${partnerReaction(finalPartner.archetypeId, 'recruiting', resolvedRecruitingId, isRecruitingDelegated)}"`,
+    background.blurb,
+  ];
+
   return {
     saveVersion: SAVE_VERSION,
+    partner: finalPartner,
     company: {
       name: name || 'Independent Wrestling',
       funds: startingFunds,
-      reputation: clamp(5 + background.repMod, 0, 100),
+      reputation: startingRep,
       week: 1, year: 1, region, style,
       difficulty: difficultyId, theme: resolvedTheme,
       background: background.id,
@@ -1683,7 +1882,7 @@ function createNewGame(opts) {
     devLog: [],
     worldEvents: [],
     history: [],
-    news: [`Welcome to ${regionLabel}. Booking in the ${styleLabel} tradition — you've got ${believer.name}, a ring, and a dream. Go find the rest of your roster.`, `Your ring: ${ringOrigin.label.toLowerCase()}. ${ringOrigin.blurb}`, background.blurb],
+    news: openingNews,
     draftShow: makeEmptyDraft(),
   };
 }
@@ -1696,7 +1895,7 @@ function normalizeGame(loaded) {
     const titleId = item.titleId !== undefined ? item.titleId : null;
     return { ...item, winnerIds, titleId };
   });
-  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280), contractPromise: w.contractPromise !== undefined ? w.contractPromise : null });
+  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280), contractPromise: w.contractPromise !== undefined ? w.contractPromise : null, character: w.character || generateCharacterCore() });
   const fixStaff = (s) => ({ ...s, trait: s.trait !== undefined ? s.trait : null, ambition: { unhappyStreak: 0, contentStreak: 0, ...(s.ambition || assignStaffAmbition()) }, weeksEmployed: s.weeksEmployed || 0 });
   const loadedCompany = loaded.company || {};
   const oldUpgrades = loadedCompany.upgrades || {};
@@ -1704,6 +1903,7 @@ function normalizeGame(loaded) {
   return {
     ...loaded,
     saveVersion: SAVE_VERSION,
+    partner: loaded.partner || generatePartner(loadedCompany.region || 'usa'),
     company: {
       region: 'usa', style: 'sports_entertainment',
       ...loadedCompany,
@@ -1734,7 +1934,7 @@ function normalizeGame(loaded) {
     feuds: loaded.feuds || [],
     relationships: loaded.relationships || [],
     inbox: loaded.inbox || [],
-    rivals: loaded.rivals || generateRivalPromotions(),
+    rivals: (loaded.rivals || generateRivalPromotions()).map((r) => ({ ...r, flagshipTalent: r.flagshipTalent || generateFlagshipTalent(r.region, r.style, r.reputation) })),
     mediaRecaps: loaded.mediaRecaps || [],
     devLog: loaded.devLog || [],
     worldEvents: loaded.worldEvents || [],
@@ -1888,6 +2088,11 @@ export default function WrestlingGM() {
   const [setupDifficultyId, setSetupDifficultyId] = useState('normal');
   const [setupBackgroundId, setSetupBackgroundId] = useState('family');
   const [setupRingOriginId, setSetupRingOriginId] = useState('found');
+  const [setupRingDelegated, setSetupRingDelegated] = useState(false);
+  const [setupVenuePathId, setSetupVenuePathId] = useState('gym_rental');
+  const [setupVenueDelegated, setSetupVenueDelegated] = useState(false);
+  const [setupRecruitingMethodId, setSetupRecruitingMethodId] = useState('in_person');
+  const [setupPartner, setSetupPartner] = useState(() => generatePartner('usa'));
   const [setupThemeMode, setSetupThemeMode] = useState('preset'); // 'preset' | 'custom'
   const [setupThemePresetId, setSetupThemePresetId] = useState('classic');
   const [setupCustomGold, setSetupCustomGold] = useState('#C4922E');
@@ -1953,7 +2158,11 @@ export default function WrestlingGM() {
     const g = createNewGame({
       name: setupName.trim(), regionId: setupRegion, styleId: setupStyle,
       rivalCount: setupRivalCount, fundsTierId: setupFundsTierId, difficultyId: setupDifficultyId,
-      theme: chosenTheme, backgroundId: setupBackgroundId, ringOriginId: setupRingOriginId,
+      theme: chosenTheme, backgroundId: setupBackgroundId,
+      ringOriginId: setupRingOriginId, ringDelegated: setupRingDelegated,
+      venuePathId: setupVenuePathId, venueDelegated: setupVenueDelegated,
+      recruitingMethodId: setupRecruitingMethodId,
+      partner: setupPartner,
     });
     setGame(g); persist(g); setNeedsSetup(false);
   }
@@ -1974,6 +2183,8 @@ export default function WrestlingGM() {
     setGame(null); setConfirmAction(null); setTab('dashboard');
     setSetupMode(''); setSetupPresetId(''); setSetupName(''); setSetupRegion(''); setSetupStyle('');
     setSetupRivalCount(5); setSetupFundsTierId('standard'); setSetupDifficultyId('normal'); setSetupBackgroundId('family'); setSetupRingOriginId('found');
+    setSetupRingDelegated(false); setSetupVenuePathId('gym_rental'); setSetupVenueDelegated(false); setSetupRecruitingMethodId('in_person');
+    setSetupPartner(generatePartner('usa'));
     setSetupThemeMode('preset'); setSetupThemePresetId('classic');
     setNeedsSetup(true);
   }
@@ -3225,25 +3436,84 @@ export default function WrestlingGM() {
               </div>
 
               <div className="flex items-center gap-2 mb-2">
+                <UserCircle size={14} color={C.gold} />
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>5. MEET YOUR PARTNER</p>
+              </div>
+              <div className="rounded-lg p-3 mb-6" style={{ backgroundColor: C.inkSoft, border: `1px solid ${C.inkFaint}` }}>
+                <p className="text-sm font-bold mb-0.5" style={{ color: C.cream }}>{setupPartner.name} — {setupPartner.label}</p>
+                <p className="text-[11px] mb-2" style={{ color: 'rgba(246,240,225,0.55)' }}>{setupPartner.dream}</p>
+                <p className="text-xs italic" style={{ color: C.goldSoft }}>"We've got {money((FUNDS_TIERS.find((f) => f.id === setupFundsTierId) || FUNDS_TIERS[1]).funds)}. Where should we start?"</p>
+              </div>
+
+              <div className="flex items-center gap-2 mb-2">
                 <Shield size={14} color={C.gold} />
-                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>5. YOUR RING</p>
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>6. YOUR RING</p>
               </div>
               <p className="text-[11px] mb-2" style={{ color: 'rgba(246,240,225,0.55)' }}>Every promotion starts somewhere. How'd you get yours?</p>
+              <div className="flex gap-2 mb-2">
+                <button onClick={() => setSetupRingDelegated(false)} className="flex-1 py-1.5 rounded-md text-xs font-semibold" style={{ backgroundColor: !setupRingDelegated ? C.gold : C.inkSoft, color: !setupRingDelegated ? C.ink : 'rgba(246,240,225,0.6)' }}>Decide Myself</button>
+                <button onClick={() => setSetupRingDelegated(true)} className="flex-1 py-1.5 rounded-md text-xs font-semibold" style={{ backgroundColor: setupRingDelegated ? C.gold : C.inkSoft, color: setupRingDelegated ? C.ink : 'rgba(246,240,225,0.6)' }}>Delegate to {setupPartner.name.split(' ')[0]}</button>
+              </div>
+              {setupRingDelegated ? (
+                <p className="text-[11px] mb-6 italic" style={{ color: C.goldSoft }}>"{partnerReaction(setupPartner.archetypeId, 'ring', PARTNER_DELEGATE_PICK[setupPartner.archetypeId].ring, true)}"</p>
+              ) : (
+                <div className="space-y-2 mb-6">
+                  {RING_ORIGINS.map((r) => (
+                    <button key={r.id} onClick={() => setSetupRingOriginId(r.id)} className="w-full rounded-lg p-3 text-left" style={{ backgroundColor: setupRingOriginId === r.id ? C.gold : C.inkSoft, border: `1px solid ${setupRingOriginId === r.id ? C.gold : C.inkFaint}` }}>
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-bold" style={{ color: setupRingOriginId === r.id ? C.ink : C.cream }}>{r.label}</p>
+                        <span className="wgm-mono text-[10px]" style={{ color: setupRingOriginId === r.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{r.cost === 0 ? 'FREE' : money(r.cost)}</span>
+                      </div>
+                      <p className="text-[11px] mt-0.5" style={{ color: setupRingOriginId === r.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{r.blurb}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 mb-2">
+                <Building2 size={14} color={C.gold} />
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>7. YOUR VENUE</p>
+              </div>
+              <p className="text-[11px] mb-2" style={{ color: 'rgba(246,240,225,0.55)' }}>Where are you running your first shows?</p>
+              <div className="flex gap-2 mb-2">
+                <button onClick={() => setSetupVenueDelegated(false)} className="flex-1 py-1.5 rounded-md text-xs font-semibold" style={{ backgroundColor: !setupVenueDelegated ? C.gold : C.inkSoft, color: !setupVenueDelegated ? C.ink : 'rgba(246,240,225,0.6)' }}>Decide Myself</button>
+                <button onClick={() => setSetupVenueDelegated(true)} className="flex-1 py-1.5 rounded-md text-xs font-semibold" style={{ backgroundColor: setupVenueDelegated ? C.gold : C.inkSoft, color: setupVenueDelegated ? C.ink : 'rgba(246,240,225,0.6)' }}>Delegate to {setupPartner.name.split(' ')[0]}</button>
+              </div>
+              {setupVenueDelegated ? (
+                <p className="text-[11px] mb-6 italic" style={{ color: C.goldSoft }}>"{partnerReaction(setupPartner.archetypeId, 'venue', PARTNER_DELEGATE_PICK[setupPartner.archetypeId].venue, true)}"</p>
+              ) : (
+                <div className="space-y-2 mb-6">
+                  {STARTUP_VENUE_PATHS.map((v) => (
+                    <button key={v.id} onClick={() => setSetupVenuePathId(v.id)} className="w-full rounded-lg p-3 text-left" style={{ backgroundColor: setupVenuePathId === v.id ? C.gold : C.inkSoft, border: `1px solid ${setupVenuePathId === v.id ? C.gold : C.inkFaint}` }}>
+                      <div className="flex items-center justify-between">
+                        <p className="text-sm font-bold" style={{ color: setupVenuePathId === v.id ? C.ink : C.cream }}>{v.label}</p>
+                        <span className="wgm-mono text-[10px]" style={{ color: setupVenuePathId === v.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{v.cost === 0 ? 'FREE' : money(v.cost)}</span>
+                      </div>
+                      <p className="text-[11px] mt-0.5" style={{ color: setupVenuePathId === v.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{v.blurb}</p>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 mb-2">
+                <Users size={14} color={C.gold} />
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>8. FINDING YOUR FIRST WRESTLER</p>
+              </div>
+              <p className="text-[11px] mb-2" style={{ color: 'rgba(246,240,225,0.55)' }}>How did you find the one who believed in this from day one?</p>
               <div className="space-y-2 mb-6">
-                {RING_ORIGINS.map((r) => (
-                  <button key={r.id} onClick={() => setSetupRingOriginId(r.id)} className="w-full rounded-lg p-3 text-left" style={{ backgroundColor: setupRingOriginId === r.id ? C.gold : C.inkSoft, border: `1px solid ${setupRingOriginId === r.id ? C.gold : C.inkFaint}` }}>
+                {STARTUP_RECRUITING_METHODS.map((m) => (
+                  <button key={m.id} onClick={() => setSetupRecruitingMethodId(m.id)} className="w-full rounded-lg p-3 text-left" style={{ backgroundColor: setupRecruitingMethodId === m.id ? C.gold : C.inkSoft, border: `1px solid ${setupRecruitingMethodId === m.id ? C.gold : C.inkFaint}` }}>
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-bold" style={{ color: setupRingOriginId === r.id ? C.ink : C.cream }}>{r.label}</p>
-                      <span className="wgm-mono text-[10px]" style={{ color: setupRingOriginId === r.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{r.cost === 0 ? 'FREE' : money(r.cost)}</span>
+                      <p className="text-sm font-bold" style={{ color: setupRecruitingMethodId === m.id ? C.ink : C.cream }}>{m.isDelegate ? `${m.label} — ${setupPartner.name.split(' ')[0]}` : m.label}</p>
+                      <span className="wgm-mono text-[10px]" style={{ color: setupRecruitingMethodId === m.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{m.cost === 0 ? 'FREE' : money(m.cost)}</span>
                     </div>
-                    <p className="text-[11px] mt-0.5" style={{ color: setupRingOriginId === r.id ? C.inkSoft : 'rgba(246,240,225,0.55)' }}>{r.blurb}</p>
                   </button>
                 ))}
               </div>
 
               <div className="flex items-center gap-2 mb-2">
                 <Palette size={14} color={C.gold} />
-                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>6. COMPANY COLORS</p>
+                <p className="wgm-mono text-[11px] tracking-widest" style={{ color: C.goldSoft }}>9. COMPANY COLORS</p>
               </div>
               <div className="grid grid-cols-3 gap-2 mb-3">
                 {THEME_PRESETS.map((t) => (
@@ -3561,6 +3831,7 @@ export default function WrestlingGM() {
 function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals, onOpenMedia, onOpenInbox, onGoRoster, onGoFreeAgents, onGoHistory }) {
   const { company, roster } = game;
   const injured = roster.filter((w) => w.injury);
+  const needsTalk = roster.filter((w) => w.ambition && (w.ambition.status === 'unhappy' || w.ambition.status === 'holdout'));
   const avgPop = Math.round(average(roster.map((w) => w.popularity)));
   const regionLabel = (REGION_LIST.find((r) => r.id === company.region) || REGION_LIST[0]).label;
   const styleLabel = (STYLE_CONFIG[company.style] || STYLE_CONFIG.sports_entertainment).label;
@@ -3586,11 +3857,27 @@ function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, 
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <MiniStat icon={Users} label="Roster" value={roster.length} onClick={onGoRoster} />
         <MiniStat icon={TrendingUp} label="Avg Pop." value={avgPop} onClick={onGoRoster} />
         <MiniStat icon={AlertTriangle} label="Injured" value={injured.length} warn={injured.length > 0} onClick={onGoRoster} />
+        <MiniStat icon={UserCircle} label="Wants to Talk" value={needsTalk.length} warn={needsTalk.length > 0} onClick={onGoRoster} />
       </div>
+
+      {game.partner && (
+        <div className="rounded-lg p-3" style={{ backgroundColor: C.cream, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <UserCircle size={15} color={C.gold} />
+              <div>
+                <p className="text-sm font-semibold" style={{ color: C.ink }}>{game.partner.name}</p>
+                <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{game.partner.label.toUpperCase()}</p>
+              </div>
+            </div>
+            <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>BOND {game.partner.bond}</p>
+          </div>
+        </div>
+      )}
 
       <div>
         <SectionTitle icon={Briefcase}>Advisor Briefing</SectionTitle>
@@ -4105,6 +4392,17 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
           </div>
         </div>
       </div>
+
+      {wrestler.character && (
+        <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.canvasAlt }}>
+          <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>ABOUT</p>
+          <p className="text-[12px] mb-2" style={{ color: C.ink }}>{characterReadout(wrestler.character)}</p>
+          <p className="text-[11px] italic" style={{ color: C.inkFaint }}>{backgroundSummary(wrestler.character)}</p>
+          {wrestler.character.lifetimeDream && (
+            <p className="text-[11px] mt-2 pt-2" style={{ color: C.goldSoft, borderTop: `1px solid ${C.line}` }}>Lifetime Dream: {wrestler.character.lifetimeDream}</p>
+          )}
+        </div>
+      )}
 
       <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: wellness.status === 'struggling' ? 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.1)' : C.canvasAlt, border: `1px solid ${wellness.status === 'struggling' ? C.rope : C.line}` }}>
         <div className="flex items-center justify-between mb-1.5">
@@ -6024,14 +6322,14 @@ function MediaModal({ recaps, companyName, onClose }) {
                   )}
 
                   <div>
-                    <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>POWER RANKINGS</p>
+                    <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>POWER RANKINGS · INDUSTRY-WIDE</p>
                     <div className="space-y-1">
                       {r.powerRankings.map((w, i) => (
-                        <div key={w.id} className="flex items-center gap-2 rounded-md p-2" style={{ backgroundColor: C.canvasAlt }}>
+                        <div key={w.id || `${w.name}-${i}`} className="flex items-center gap-2 rounded-md p-2" style={{ backgroundColor: C.canvasAlt }}>
                           <span className="wgm-mono text-xs font-bold w-4" style={{ color: C.gold }}>{i + 1}</span>
                           <div className="flex-1 min-w-0">
                             <p className="text-[11px] font-semibold truncate" style={{ color: C.ink }}>{w.name}</p>
-                            <p className="text-[9px] italic truncate" style={{ color: C.inkFaint }}>"{w.gimmick}"</p>
+                            <p className="text-[9px] italic truncate" style={{ color: C.inkFaint }}>{w.promotion ? w.promotion : `"${w.gimmick}"`}</p>
                           </div>
                           <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>POP {w.popularity}</span>
                         </div>
