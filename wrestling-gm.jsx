@@ -152,10 +152,12 @@ const GIMMICK_ADJ = ['Iron','Savage','Golden','Wild','Silent','Crimson','Atomic'
 const GIMMICK_NOUN = ['Wolf','Hammer','Reaper','Machine','Saint','Outlaw','Phantom','Titan','Viper','Renegade','Bull','Storm','Ghost','Predator','Warden','Comet','Maverick','Executioner'];
 
 const TIER_CONFIG = {
+  Jobber: { statRange: [12, 32], popRange: [1, 8], salaryRange: [50, 130], ageRange: [19, 42], confRange: [15, 35] },
   Rookie: { statRange: [28, 52], popRange: [3, 18], salaryRange: [120, 280], ageRange: [20, 26], confRange: [35, 55] },
   'Mid-Card': { statRange: [42, 68], popRange: [16, 42], salaryRange: [280, 650], ageRange: [24, 34], confRange: [50, 72] },
   Star: { statRange: [62, 86], popRange: [40, 72], salaryRange: [650, 1600], ageRange: [27, 38], confRange: [65, 85] },
   Legend: { statRange: [80, 97], popRange: [70, 97], salaryRange: [1600, 3800], ageRange: [35, 48], confRange: [75, 95] },
+  Celebrity: { statRange: [18, 42], popRange: [55, 90], salaryRange: [900, 2200], ageRange: [24, 50], confRange: [55, 85], charismaFloor: 70 },
 };
 
 const VENUE_TIERS = [
@@ -340,7 +342,70 @@ const PARTNER_ARCHETYPES = [
 ];
 function generatePartner(regionId) {
   const archetype = pick(PARTNER_ARCHETYPES);
-  return { name: generateAdvisorName(regionId), archetypeId: archetype.id, label: archetype.label, dream: archetype.dream, bias: archetype.bias, bond: 55 };
+  return { name: generateAdvisorName(regionId), archetypeId: archetype.id, label: archetype.label, dream: archetype.dream, bias: archetype.bias };
+}
+function computePartnerAlignment(archetypeId, choices) {
+  const picks = PARTNER_DELEGATE_PICK[archetypeId] || {};
+  let matches = 0;
+  if (choices.ring === picks.ring) matches++;
+  if (choices.venue === picks.venue) matches++;
+  if (choices.recruiting === picks.recruiting) matches++;
+  return matches;
+}
+function initPartnerRelationship(archetypeId, choices) {
+  const alignment = computePartnerAlignment(archetypeId, choices);
+  const delegateCount = [choices.ringDelegated, choices.venueDelegated, choices.recruitingDelegated].filter(Boolean).length;
+  return {
+    trust: clamp(50 + delegateCount * 8, 20, 90),
+    respect: clamp(50 + alignment * 5, 20, 90),
+    affection: clamp(55 + delegateCount * 3, 20, 90),
+    compatibility: clamp(45 + alignment * 12, 20, 95),
+    sharedVision: clamp(45 + alignment * 10, 20, 90),
+    history: [],
+  };
+}
+function nudgePartnerRelationship(relationship, deltas, reasonText, week, year) {
+  const next = {
+    trust: clamp(relationship.trust + (deltas.trust || 0), 0, 100),
+    respect: clamp(relationship.respect + (deltas.respect || 0), 0, 100),
+    affection: clamp(relationship.affection + (deltas.affection || 0), 0, 100),
+    compatibility: relationship.compatibility,
+    sharedVision: clamp(relationship.sharedVision + (deltas.sharedVision || 0), 0, 100),
+    history: relationship.history,
+  };
+  if (reasonText) next.history = [...relationship.history, { week, year, text: reasonText }].slice(-20);
+  return next;
+}
+function partnerShowDeltas(archetypeId, avgStars, netProfit) {
+  const deltas = {};
+  if (archetypeId === 'believer') {
+    if (avgStars >= 3.5) { deltas.sharedVision = 2; deltas.respect = 1; }
+    else if (avgStars < 2) { deltas.sharedVision = -2; }
+  } else if (archetypeId === 'operator') {
+    if (netProfit > 0) { deltas.trust = 1; deltas.respect = 1; }
+    else if (netProfit < -1000) { deltas.trust = -2; deltas.respect = -1; }
+  } else if (archetypeId === 'promoter') {
+    if (avgStars >= 3.25) { deltas.respect = 1; deltas.affection = 1; }
+    else if (avgStars < 2) { deltas.respect = -1; }
+  }
+  return deltas;
+}
+function partnerRelationshipReadout(relationship) {
+  if (!relationship) return '';
+  const { trust, respect, affection, sharedVision } = relationship;
+  const notes = [];
+  if (trust >= 70) notes.push('trusts your judgment');
+  else if (trust <= 35) notes.push("doesn't fully trust the direction things are going");
+  if (respect >= 70) notes.push('genuinely respects how you run this business');
+  else if (respect <= 35) notes.push('has real doubts about your decisions');
+  if (affection >= 70) notes.push('cares about you beyond just the business');
+  else if (affection <= 35) notes.push('the warmth between you has cooled');
+  if (sharedVision >= 70) notes.push("is fully bought in on where this is headed");
+  else if (sharedVision <= 35) notes.push("is starting to wonder if you both still want the same thing");
+  if (!notes.length) return 'Feels steady about where things stand between you two.';
+  const chosen = notes.slice(0, 2);
+  const capped = chosen[0].charAt(0).toUpperCase() + chosen[0].slice(1);
+  return chosen.length > 1 ? `${capped}, but ${chosen[1]}.` : `${capped}.`;
 }
 function partnerReaction(archetypeId, category, choiceId, delegated) {
   const lines = {
@@ -850,10 +915,12 @@ const LIFETIME_DREAMS = [
   'To never have to depend on anyone else again.',
   'To belong to something bigger than themselves.',
 ];
+const NEED_LABELS = { purpose: 'a sense of purpose', belonging: 'belonging somewhere', recognition: 'being recognized', security: 'security', freedom: 'freedom', mastery: 'mastering their craft', adventure: 'chasing the next thing', legacy: 'leaving something behind' };
+const VALUE_LABELS = { family: 'family', money: 'money', loyalty: 'loyalty', honor: 'honor', fame: 'fame', competition: 'competition', creativity: 'creative freedom', service: 'being useful to others' };
 function characterReadout(character) {
   if (!character) return '';
-  const needLabel = { purpose: 'a sense of purpose', belonging: 'belonging somewhere', recognition: 'being recognized', security: 'security', freedom: 'freedom', mastery: 'mastering their craft', adventure: 'chasing the next thing', legacy: 'leaving something behind' };
-  const valueLabel = { family: 'family', money: 'money', loyalty: 'loyalty', honor: 'honor', fame: 'fame', competition: 'competition', creativity: 'creative freedom', service: 'being useful to others' };
+  const needLabel = NEED_LABELS;
+  const valueLabel = VALUE_LABELS;
   const topNeed = character.needs[0];
   const topValue = character.values[0];
   const d = character.dimensions;
@@ -873,6 +940,72 @@ function backgroundSummary(character) {
   const b = character.background;
   return `They ${b.childhood}, ${b.financial}, and ${b.path}. What stays with them most: ${b.memory}.`;
 }
+function negotiationFit(character, termId, offerQuality, reputation) {
+  if (!character) return 50;
+  const needs = character.needs || [];
+  const values = character.values || [];
+  const d = character.dimensions || {};
+  let score = 45;
+  if (termId === 'standard') {
+    if (needs.includes('security')) score += 25;
+    if (values.includes('money')) score += 15;
+    if (d.riskTolerance < 40) score += 10;
+    if (needs.includes('freedom') || needs.includes('recognition')) score -= 10;
+  } else if (termId === 'promise_title') {
+    if (needs.includes('recognition')) score += 25;
+    if (needs.includes('legacy')) score += 15;
+    if (needs.includes('purpose')) score += 10;
+    if (values.includes('fame') || values.includes('honor') || values.includes('competition')) score += 15;
+    if (d.riskTolerance >= 60) score += 10;
+    if (needs.includes('security')) score -= 20;
+  } else if (termId === 'creative_control') {
+    if (needs.includes('freedom')) score += 25;
+    if (needs.includes('mastery')) score += 15;
+    if (values.includes('creativity')) score += 20;
+    if (values.includes('honor')) score += 10;
+    if (d.patience < 40) score += 10;
+    if (needs.includes('belonging') || needs.includes('security')) score -= 10;
+  }
+  if (offerQuality !== undefined) score += (offerQuality - 1) * 55;
+  if (reputation !== undefined) {
+    if (reputation >= 60) score += 8;
+    else if (reputation <= 20) score -= 10;
+  }
+  return clamp(score, 0, 100);
+}
+function negotiationFitHint(fit) {
+  if (fit >= 70) return "They'd jump at this.";
+  if (fit >= 45) return "They'd probably go for this.";
+  if (fit >= 25) return "They're not sure about this.";
+  return "This really doesn't sit right with them.";
+}
+function negotiationRejectionChance(fit) {
+  return fit < 40 ? clamp((40 - fit) / 80, 0, 0.5) : 0;
+}
+function negotiationRejectionReason(w, termId) {
+  const c = w.character;
+  if (!c) return `${w.name} turns down the offer.`;
+  if (termId === 'standard' && (c.needs.includes('freedom') || c.needs.includes('recognition'))) {
+    return `${w.name} turns it down. A flat contract doesn't speak to someone driven by ${NEED_LABELS[c.needs[0]] || c.needs[0]}.`;
+  }
+  if (termId === 'promise_title' && c.needs.includes('security')) {
+    return `${w.name} turns it down. A promise isn't security, and that's what they actually need right now.`;
+  }
+  if (termId === 'creative_control' && (c.needs.includes('belonging') || c.needs.includes('security'))) {
+    return `${w.name} turns it down. Creative control means nothing to someone who just wants to feel like part of something.`;
+  }
+  return `${w.name} turns down the offer. It just doesn't sit right with who they are — they value ${VALUE_LABELS[c.values[0]] || c.values[0]} more than what's on the table.`;
+}
+function poachSuccessChance(wrestler, rival, company, termId, offerQuality) {
+  let chance = 0.12;
+  chance += clamp((10 - wrestler.contractWeeksLeft) / 10, 0, 1) * 0.22;
+  chance += clamp((50 - wrestler.rivalHappiness) / 50, 0, 1) * 0.25;
+  chance += (offerQuality - 1) * 0.25;
+  chance += clamp((company.reputation - rival.reputation) / 250, -0.1, 0.1);
+  const fit = negotiationFit(wrestler.character, termId, offerQuality, company.reputation);
+  chance += (fit - 50) / 250;
+  return clamp(chance, 0.03, 0.85);
+}
 
 function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainment') {
   const cfg = TIER_CONFIG[tier];
@@ -887,6 +1020,7 @@ function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainmen
     stamina: randInt(cfg.statRange[0], cfg.statRange[1]),
   };
   Object.keys(style.statBias || {}).forEach((k) => { stats[k] = clamp(stats[k] + style.statBias[k], 5, 99); });
+  if (cfg.charismaFloor) stats.charisma = Math.max(stats.charisma, randInt(cfg.charismaFloor, 97));
   const alignRoll = Math.random();
   const alignment = alignRoll < 0.45 ? 'face' : alignRoll < 0.9 ? 'heel' : 'tweener';
   const prefix = typeof style.prefix === 'object' ? style.prefix[gender] : style.prefix;
@@ -926,8 +1060,9 @@ function generateStaff(role) {
 
 function generateFreeAgentPool(regionId = 'usa', styleId = 'sports_entertainment', count = 14, rookieHeavy = false) {
   const roll = () => {
-    if (rookieHeavy) { const r = Math.random(); return r < 0.85 ? 'Rookie' : 'Mid-Card'; }
-    const r = Math.random(); return r < 0.55 ? 'Mid-Card' : r < 0.82 ? 'Rookie' : r < 0.96 ? 'Star' : 'Legend';
+    if (rookieHeavy) { const r = Math.random(); return r < 0.25 ? 'Jobber' : r < 0.92 ? 'Rookie' : 'Mid-Card'; }
+    const r = Math.random();
+    return r < 0.18 ? 'Jobber' : r < 0.55 ? 'Rookie' : r < 0.82 ? 'Mid-Card' : r < 0.94 ? 'Star' : r < 0.98 ? 'Legend' : 'Celebrity';
   };
   return Array.from({ length: count }, () => generateWrestler(roll(), regionId, styleId));
 }
@@ -1223,6 +1358,17 @@ const PROMOTION_PREFIXES = ['Apex', 'Titan', 'Frontier', 'Elite', 'Vanguard', 'I
 const PROMOTION_SUFFIXES = ['Wrestling', 'Pro Wrestling', 'Championship Wrestling', 'Combat League', 'Wrestling Federation', 'Grappling Alliance'];
 const generatePromotionName = () => `${pick(PROMOTION_PREFIXES)} ${pick(PROMOTION_SUFFIXES)}`;
 
+function generateRivalRoster(region, style, reputation) {
+  const size = reputation >= 55 ? randInt(4, 6) : reputation >= 30 ? randInt(3, 5) : randInt(2, 4);
+  const tierPool = reputation >= 55 ? ['Mid-Card', 'Mid-Card', 'Star', 'Star', 'Legend'] : reputation >= 30 ? ['Rookie', 'Mid-Card', 'Mid-Card', 'Star'] : ['Jobber', 'Rookie', 'Rookie', 'Mid-Card'];
+  return Array.from({ length: size }, () => {
+    const w = generateWrestler(pick(tierPool), region, style);
+    return { ...w, contractWeeksLeft: randInt(4, 40), rivalHappiness: randInt(30, 90) };
+  });
+}
+function flagshipFromRoster(roster) {
+  return [...(roster || [])].sort((a, b) => b.popularity - a.popularity).slice(0, 2).map((w) => ({ name: w.name, gimmick: w.gimmick, popularity: w.popularity }));
+}
 function generateRivalPromotions(count = 5) {
   const usedNames = new Set();
   return Array.from({ length: count }, () => {
@@ -1232,13 +1378,15 @@ function generateRivalPromotions(count = 5) {
     const region = pick(REGION_LIST).id;
     const style = pick(STYLE_LIST).id;
     const reputation = randInt(10, 55);
+    const roster = generateRivalRoster(region, style, reputation);
     return {
       id: uid(),
       name,
       region, style, reputation,
       momentum: randInt(-1, 1),
       relationship: 'neutral',
-      flagshipTalent: generateFlagshipTalent(region, style, reputation),
+      roster,
+      flagshipTalent: flagshipFromRoster(roster),
     };
   });
 }
@@ -1395,7 +1543,11 @@ function processRivalConsolidation(rivals) {
       if (targets.length) {
         const target = [...targets].sort((a, b) => a.reputation - b.reputation)[0];
         news.push(`${acquirer.name} has acquired ${target.name}, absorbing their operation.`);
-        list = list.filter((r) => r.id !== target.id).map((r) => (r.id === acquirer.id ? { ...r, reputation: clamp(r.reputation + Math.round(target.reputation / 3), 0, 98), flagshipTalent: [...(r.flagshipTalent || []), ...(target.flagshipTalent || [])].slice(0, 3) } : r));
+        list = list.filter((r) => r.id !== target.id).map((r) => {
+          if (r.id !== acquirer.id) return r;
+          const mergedRoster = [...(r.roster || []), ...(target.roster || [])].slice(0, 8);
+          return { ...r, reputation: clamp(r.reputation + Math.round(target.reputation / 3), 0, 98), roster: mergedRoster, flagshipTalent: flagshipFromRoster(mergedRoster) };
+        });
       }
     }
   });
@@ -1403,7 +1555,8 @@ function processRivalConsolidation(rivals) {
     let name = generatePromotionName();
     while (list.some((r) => r.name === name)) name = generatePromotionName();
     const region = pick(REGION_LIST).id; const style = pick(STYLE_LIST).id; const reputation = randInt(8, 20);
-    list = [...list, { id: uid(), name, region, style, reputation, momentum: randInt(-1, 1), relationship: 'neutral', flagshipTalent: generateFlagshipTalent(region, style, reputation) }];
+    const roster = generateRivalRoster(region, style, reputation);
+    list = [...list, { id: uid(), name, region, style, reputation, momentum: randInt(-1, 1), relationship: 'neutral', roster, flagshipTalent: flagshipFromRoster(roster) }];
     news.push(`A new promotion, ${name}, has launched.`);
   }
   return { rivals: list, news };
@@ -1825,8 +1978,11 @@ function createNewGame(opts) {
   if (recruitingMethod.statBias) believer.stats[recruitingMethod.statBias] = clamp(believer.stats[recruitingMethod.statBias] + 15, 5, 99);
   const startingRoster = [{ ...believer, storyline: [{ week: 1, year: 1, text: `Found via ${recruitingMethod.label.toLowerCase()} and believed in this promotion from day one.` }] }];
 
-  const bondBonus = (venueDelegated ? 8 : 0) + (ringDelegated ? 8 : 0) + (isRecruitingDelegated ? 8 : 0);
-  const finalPartner = { ...partner, bond: clamp(partner.bond + bondBonus, 0, 100) };
+  const relationship = initPartnerRelationship(partner.archetypeId, {
+    ring: resolvedRingOriginId, venue: resolvedVenuePathId, recruiting: resolvedRecruitingId,
+    ringDelegated, venueDelegated, recruitingDelegated: isRecruitingDelegated,
+  });
+  const finalPartner = { ...partner, relationship };
 
   const startingFunds = Math.max(500, fundsTier.funds + background.fundsMod - ringOrigin.cost - venuePath.cost - recruitingMethod.cost);
   const startingRep = clamp(5 + background.repMod + venuePath.repBonus, 0, 100);
@@ -1868,7 +2024,7 @@ function createNewGame(opts) {
       acquisitionsCount: 0,
     },
     roster: startingRoster,
-    freeAgents: generateFreeAgentPool(region, style, 6, true),
+    freeAgents: generateFreeAgentPool(region, style, 16, true),
     staff: { announcers: [], commentators: [], referees: [], writers: [], roadAgents: [] },
     staffPool: { announcers: Array.from({ length: 3 }, () => generateStaff('Announcer')), commentators: Array.from({ length: 3 }, () => generateStaff('Commentator')), referees: Array.from({ length: 3 }, () => generateStaff('Referee')), writers: Array.from({ length: 3 }, () => generateStaff('Writer')), roadAgents: Array.from({ length: 3 }, () => generateStaff('Road Agent')) },
     titles: [],
@@ -1903,7 +2059,12 @@ function normalizeGame(loaded) {
   return {
     ...loaded,
     saveVersion: SAVE_VERSION,
-    partner: loaded.partner || generatePartner(loadedCompany.region || 'usa'),
+    partner: (() => {
+      const p = loaded.partner || generatePartner(loadedCompany.region || 'usa');
+      if (p.relationship) return p;
+      const { bond, ...rest } = p;
+      return { ...rest, relationship: { trust: bond || 55, respect: bond || 55, affection: bond || 55, compatibility: 50, sharedVision: bond || 55, history: [] } };
+    })(),
     company: {
       region: 'usa', style: 'sports_entertainment',
       ...loadedCompany,
@@ -1934,7 +2095,10 @@ function normalizeGame(loaded) {
     feuds: loaded.feuds || [],
     relationships: loaded.relationships || [],
     inbox: loaded.inbox || [],
-    rivals: (loaded.rivals || generateRivalPromotions()).map((r) => ({ ...r, flagshipTalent: r.flagshipTalent || generateFlagshipTalent(r.region, r.style, r.reputation) })),
+    rivals: (loaded.rivals || generateRivalPromotions()).map((r) => {
+      const roster = r.roster || generateRivalRoster(r.region, r.style, r.reputation);
+      return { ...r, roster, flagshipTalent: r.flagshipTalent || flagshipFromRoster(roster) };
+    }),
     mediaRecaps: loaded.mediaRecaps || [],
     devLog: loaded.devLog || [],
     worldEvents: loaded.worldEvents || [],
@@ -2116,8 +2280,10 @@ export default function WrestlingGM() {
   const [relationshipBuilderOpen, setRelationshipBuilderOpen] = useState(false);
   const [shopDept, setShopDept] = useState('titles');
   const [rivalsModalOpen, setRivalsModalOpen] = useState(false);
+  const [poachTarget, setPoachTarget] = useState(null);
   const [mediaModalOpen, setMediaModalOpen] = useState(false);
   const [inboxModalOpen, setInboxModalOpen] = useState(false);
+  const [partnerModalOpen, setPartnerModalOpen] = useState(false);
   const [devLogModalOpen, setDevLogModalOpen] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [toast, setToast] = useState(null);
@@ -2290,13 +2456,14 @@ export default function WrestlingGM() {
     });
     showToast('Gave a raise.');
   }
-  function signFreeAgent(id, termId) {
+  function signFreeAgent(id, termId, bonusPct = 1, wagePct = 1) {
+    let outcome = 'none';
     updateGame((g) => {
       if (!canActToday(g.company)) { showToast('No time left this week to sign anyone — run the show or wait for next week.'); return g; }
       const w = g.freeAgents.find((f) => f.id === id);
       if (!w) return g;
       const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
-      let bonus = w.salary * 2 * (w.signingMult || 1) * term.bonusMult;
+      let bonus = w.salary * 2 * (w.signingMult || 1) * term.bonusMult * bonusPct;
       if (hasTrait(w, 'difficult')) bonus = Math.round(bonus * 1.3);
       if (hasTrait(w, 'company_man')) bonus = Math.round(bonus * 0.8);
       const bossRep = g.company.bossReputation !== undefined ? g.company.bossReputation : 50;
@@ -2305,7 +2472,14 @@ export default function WrestlingGM() {
         else if (bossRep <= 30) bonus = Math.round(bonus * 1.25);
       }
       bonus = Math.round(bonus);
+      const weeklyWage = Math.round(w.salary * wagePct);
       if (g.company.funds < bonus) { showToast('Not enough funds for the signing bonus.'); return g; }
+      const offerQuality = (bonusPct + wagePct) / 2;
+      const fit = negotiationFit(w.character, term.id, offerQuality, g.company.reputation);
+      if (Math.random() < negotiationRejectionChance(fit)) {
+        outcome = 'rejected';
+        return tickOneDay({ ...g, news: [negotiationRejectionReason(w, term.id), ...g.news].slice(0, 30) });
+      }
       let relationships = g.relationships;
       if (g.roster.length && Math.random() < 0.2) {
         const other = pick(g.roster);
@@ -2317,15 +2491,17 @@ export default function WrestlingGM() {
       const contractPromise = term.promiseType ? { type: term.promiseType, deadlineWeek, deadlineYear } : null;
       const signStoryline = w.discoveredVia ? `Discovered via ${w.discoveredVia} and signed with ${g.company.name}.` : `Signed with ${g.company.name}.`;
       const termStoryline = term.id === 'promise_title' ? ` Promised a title within ${term.promiseWeeks} weeks.` : term.id === 'creative_control' ? ` Negotiated a creative control clause.` : '';
+      outcome = 'signed';
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
-        roster: [...g.roster, { ...w, contractWeeksLeft: randInt(12, 26), contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline }].slice(-20) }],
+        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: randInt(12, 26), contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline }].slice(-20) }],
         freeAgents: g.freeAgents.filter((f) => f.id !== id),
         relationships,
       });
     });
-    showToast('Wrestler signed.');
+    if (outcome === 'rejected') showToast('They turned down the offer.');
+    else if (outcome !== 'none') showToast('Wrestler signed.');
   }
   function searchForTalent(methodId) {
     const method = TALENT_SEARCH_METHODS.find((m) => m.id === methodId);
@@ -2520,7 +2696,7 @@ export default function WrestlingGM() {
       if (rival.relationship === 'pact') { showToast('Break the pact first.'); return g; }
       const cost = acquisitionCostFor(rival);
       if (g.company.funds < cost) { showToast('Not enough funds for this acquisition.'); return g; }
-      const newTalent = Array.from({ length: randInt(2, 4) }, () => generateWrestler(pick(['Rookie', 'Mid-Card', 'Mid-Card', 'Star']), rival.region, rival.style));
+      const newTalent = (rival.roster && rival.roster.length) ? rival.roster.map((w) => ({ ...w, discoveredVia: `absorbed from ${rival.name}` })) : Array.from({ length: randInt(2, 4) }, () => generateWrestler(pick(['Rookie', 'Mid-Card', 'Mid-Card', 'Star']), rival.region, rival.style));
       const repGain = Math.round(rival.reputation / 5);
       return tickOneDay({
         ...g,
@@ -2531,6 +2707,50 @@ export default function WrestlingGM() {
       });
     });
     showToast('Promotion acquired.');
+  }
+  function poachRivalWrestler(rivalId, wrestlerId, termId, bonusPct = 1, wagePct = 1) {
+    let outcome = 'none';
+    updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
+      const rival = g.rivals.find((r) => r.id === rivalId);
+      if (!rival) return g;
+      if (rival.relationship === 'pact') { showToast("Can't poach from a promotion you have a pact with."); return g; }
+      const w = (rival.roster || []).find((r) => r.id === wrestlerId);
+      if (!w) return g;
+      const eligible = w.contractWeeksLeft <= 6 || w.rivalHappiness < 35;
+      if (!eligible) { showToast("They're not close enough to their contract or unhappy enough to approach yet."); return g; }
+      const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
+      let bonus = w.salary * 2.5 * term.bonusMult * bonusPct;
+      bonus = Math.round(bonus);
+      const weeklyWage = Math.round(w.salary * wagePct * 1.1);
+      if (g.company.funds < bonus) { showToast('Not enough funds for this offer.'); return g; }
+      const offerQuality = (bonusPct + wagePct) / 2;
+      const chance = poachSuccessChance(w, rival, g.company, term.id, offerQuality);
+      if (Math.random() >= chance) {
+        outcome = 'failed';
+        return tickOneDay({ ...g, news: [`${w.name} decided to stay with ${rival.name} — the offer wasn't enough to pull them away.`, ...g.news].slice(0, 30) });
+      }
+      let deadlineWeek = g.company.week + term.promiseWeeks; let deadlineYear = g.company.year;
+      while (deadlineWeek > 52) { deadlineWeek -= 52; deadlineYear += 1; }
+      const contractPromise = term.promiseType ? { type: term.promiseType, deadlineWeek, deadlineYear } : null;
+      outcome = 'signed';
+      return tickOneDay({
+        ...g,
+        company: { ...g.company, funds: g.company.funds - bonus, bossReputation: bumpBossRep(g, -1) },
+        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: randInt(12, 26), contractPromise, discoveredVia: `poached from ${rival.name}`, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Poached away from ${rival.name}.` }].slice(-20) }],
+        rivals: g.rivals.map((r) => (r.id === rivalId ? {
+          ...r,
+          roster: (r.roster || []).filter((x) => x.id !== wrestlerId),
+          flagshipTalent: flagshipFromRoster((r.roster || []).filter((x) => x.id !== wrestlerId)),
+          reputation: clamp(r.reputation - 3, 0, 100),
+          momentum: clamp(r.momentum - 1, -2, 2),
+          relationship: r.relationship === 'ally' || r.relationship === 'neutral' ? 'rival' : r.relationship,
+        } : r)),
+        news: [`You poached ${w.name} away from ${rival.name}!`, ...g.news].slice(0, 30),
+      });
+    });
+    if (outcome === 'signed') showToast('Poach successful — welcome to the roster.');
+    else if (outcome === 'failed') showToast('They turned you down.');
   }
 
   /* ---------- Upgrade actions ---------- */
@@ -2788,6 +3008,10 @@ export default function WrestlingGM() {
       const payroll = sum(g.roster.map((w) => w.salary)) + sum(staffAll.map((s) => s.salary));
       let nextWeek = g.company.week + 1; let nextYear = g.company.year;
       if (nextWeek > 52) { nextWeek = 1; nextYear += 1; }
+      let partner = g.partner;
+      if (partner && partner.relationship && partner.archetypeId === 'promoter') {
+        partner = { ...partner, relationship: nudgePartnerRelationship(partner.relationship, { trust: -2 }, `${partner.name} wasn't thrilled to see a week go by with no show. That's not how this business gets built.`, g.company.week, g.company.year) };
+      }
       return {
         ...g,
         company: {
@@ -2797,6 +3021,7 @@ export default function WrestlingGM() {
           weekDay: 1,
           unavailableVenueIds: [],
         },
+        partner,
         news: [`No show ran this week. The roster and staff still had to be paid — ${money(payroll)} in payroll.`, ...g.news].slice(0, 30),
       };
     });
@@ -2929,10 +3154,31 @@ export default function WrestlingGM() {
     const rivalNews = [];
     const worldEventAdds = [];
     let rivalRepTrickle = 0;
+    let nextStaffPool = game.staffPool;
+    let nextFreeAgentsFromRivals = [];
     let nextRivals = game.rivals.map((rival) => {
       const ticked = tickRivalPromotion(rival);
       if (rival.relationship === 'pact') rivalRepTrickle += 0.6;
       else if (rival.relationship === 'ally') rivalRepTrickle += 0.3;
+
+      let roster = (ticked.roster || []).map((w) => {
+        const weeksLeft = w.contractWeeksLeft - 1;
+        if (weeksLeft > 0) {
+          const drift = ticked.momentum < 0 ? -randInt(0, 3) : ticked.momentum > 0 ? randInt(-1, 2) : randInt(-1, 1);
+          return { ...w, contractWeeksLeft: weeksLeft, rivalHappiness: clamp(w.rivalHappiness + drift, 5, 98) };
+        }
+        const renewChance = clamp(w.rivalHappiness / 130, 0.15, 0.8);
+        if (Math.random() < renewChance) return { ...w, contractWeeksLeft: randInt(15, 40), rivalHappiness: clamp(w.rivalHappiness + randInt(-5, 10), 5, 98) };
+        return null;
+      });
+      const departed = (ticked.roster || []).filter((_, i) => roster[i] === null);
+      roster = roster.filter(Boolean);
+      departed.forEach((w) => {
+        nextFreeAgentsFromRivals.push({ ...w, discoveredVia: `formerly of ${ticked.name}` });
+        rivalNews.push(`${w.name} is a free agent after leaving ${ticked.name}.`);
+        worldEventAdds.push({ type: 'departure', week: game.company.week, year: game.company.year, rivalName: ticked.name, targetName: w.name, text: `${w.name} left ${ticked.name} as their contract ran out.` });
+      });
+
       if (freeAgents.length && Math.random() < rivalPoachChance(ticked)) {
         const target = pick(freeAgents);
         freeAgents = freeAgents.filter((w) => w.id !== target.id);
@@ -2944,8 +3190,22 @@ export default function WrestlingGM() {
         rivalNews.push(`${ticked.name} ${flavor}.`);
         worldEventAdds.push({ type: isUp ? 'flavor_up' : 'flavor_down', week: game.company.week, year: game.company.year, rivalName: ticked.name, text: `${ticked.name} ${flavor}.` });
       }
-      return ticked;
+
+      if (Math.random() < rivalPoachChance(ticked) * 0.6) {
+        const roles = ['Announcer', 'Commentator', 'Referee', 'Writer', 'Road Agent'].filter((r) => (nextStaffPool[staffRoleKey(r)] || []).length > 0);
+        if (roles.length) {
+          const role = pick(roles);
+          const key = staffRoleKey(role);
+          const candidate = pick(nextStaffPool[key]);
+          nextStaffPool = { ...nextStaffPool, [key]: nextStaffPool[key].filter((s) => s.id !== candidate.id) };
+          rivalNews.push(`${ticked.name} hired away ${candidate.name} before you got the chance.`);
+          worldEventAdds.push({ type: 'staff_poach', week: game.company.week, year: game.company.year, rivalName: ticked.name, targetName: candidate.name, text: `${ticked.name} hired ${role.toLowerCase()} ${candidate.name} out from under you.` });
+        }
+      }
+
+      return { ...ticked, roster, flagshipTalent: flagshipFromRoster(roster) };
     });
+    if (nextFreeAgentsFromRivals.length) freeAgents = [...freeAgents, ...nextFreeAgentsFromRivals];
     const consolidation = processRivalConsolidation(nextRivals);
     nextRivals = consolidation.rivals;
     consolidation.news.forEach((n) => {
@@ -2960,11 +3220,32 @@ export default function WrestlingGM() {
       rivalNews.push(`New offer in your inbox: ${newOffer.text}`);
     }
 
-    if (freeAgents.length < 20 && Math.random() < 0.3) {
-      const fresh = generateWrestler('Rookie', game.company.region, game.company.style);
-      freeAgents = [...freeAgents, fresh];
-      rivalNews.push(`New face on the free agent market: ${fresh.name}, fresh off the local scene.`);
+    const FA_POOL_MIN = 12;
+    const FA_POOL_CAP = 30;
+    if (freeAgents.length < FA_POOL_CAP) {
+      const chance = freeAgents.length < FA_POOL_MIN ? 0.85 : 0.5;
+      if (Math.random() < chance) {
+        const tier = pick(['Jobber', 'Jobber', 'Rookie', 'Rookie', 'Rookie', 'Mid-Card']);
+        const fresh = generateWrestler(tier, game.company.region, game.company.style);
+        freeAgents = [...freeAgents, fresh];
+        rivalNews.push(`New face on the free agent market: ${fresh.name}, fresh off the local scene.`);
+        if (freeAgents.length < FA_POOL_CAP && Math.random() < 0.25) {
+          const tier2 = pick(['Jobber', 'Rookie', 'Rookie', 'Mid-Card']);
+          const fresh2 = generateWrestler(tier2, game.company.region, game.company.style);
+          freeAgents = [...freeAgents, fresh2];
+          rivalNews.push(`Another name hit the market this week: ${fresh2.name}.`);
+        }
+      }
     }
+
+    const STAFF_POOL_CAP = 6;
+    ['Announcer', 'Commentator', 'Referee', 'Writer', 'Road Agent'].forEach((role) => {
+      const key = staffRoleKey(role);
+      const pool = nextStaffPool[key] || [];
+      if (pool.length < STAFF_POOL_CAP && Math.random() < (pool.length < 3 ? 0.6 : 0.3)) {
+        nextStaffPool = { ...nextStaffPool, [key]: [...pool, generateStaff(role)] };
+      }
+    });
 
     let nextTagTeams = game.tagTeams
       .map((t) => {
@@ -3078,6 +3359,7 @@ export default function WrestlingGM() {
     const wellnessNews = [];
     let wellnessRepPenalty = 0;
     let contractPromiseBossRep = 0;
+    let contractPromiseTrustDelta = 0;
     rosterAfterAmbitions = rosterAfterAmbitions.map((w) => {
       const { wellness, news: wNews, repPenalty } = tickWellness(w);
       if (wNews) { wellnessNews.push(wNews); addStoryline(w.id, wNews); }
@@ -3085,6 +3367,7 @@ export default function WrestlingGM() {
       const { contractPromise, news: promiseNews, moraleDelta, bossRepDelta } = checkContractPromise(w, ambitionCtx, game.company.week, game.company.year);
       if (promiseNews) { wellnessNews.push(promiseNews); addStoryline(w.id, promiseNews); }
       contractPromiseBossRep += bossRepDelta;
+      contractPromiseTrustDelta += bossRepDelta > 0 ? 1 : bossRepDelta < 0 ? -2 : 0;
       return { ...w, wellness, contractPromise, morale: clamp(w.morale + moraleDelta, 0, 100) };
     });
 
@@ -3194,6 +3477,15 @@ export default function WrestlingGM() {
     relationshipNews.forEach((n) => newsEntries.push(n));
     newsEntries.push(result.netProfit >= 0 ? `The show turned a profit of ${money(result.netProfit)}.` : `The show lost ${money(Math.abs(result.netProfit))}.`);
 
+    let nextPartner = game.partner;
+    if (nextPartner && nextPartner.relationship) {
+      const deltas = partnerShowDeltas(nextPartner.archetypeId, result.avgStars, result.netProfit);
+      if (contractPromiseTrustDelta) deltas.trust = (deltas.trust || 0) + contractPromiseTrustDelta;
+      if (Object.keys(deltas).length) {
+        nextPartner = { ...nextPartner, relationship: nudgePartnerRelationship(nextPartner.relationship, deltas, null, game.company.week, game.company.year) };
+      }
+    }
+
     const historyEntry = {
       week: game.company.week, year: game.company.year, venueName: result.venue.name,
       showName: draftShow.showName || `${game.company.name} Wrestling`,
@@ -3231,6 +3523,11 @@ export default function WrestlingGM() {
       nextMediaRecaps = [recap, ...game.mediaRecaps].slice(0, 24);
       newsEntries.push(`Wrestling media has published its Month ${monthNum} recap.`);
       (recap.press || []).forEach((p) => addDevLog('journalist', `${p.name} (${p.title}) said: "${p.take}"`));
+      if (nextPartner && nextPartner.relationship) {
+        const momentText = `${nextPartner.name}: "${partnerRelationshipReadout(nextPartner.relationship)}"`;
+        newsEntries.push(momentText);
+        nextPartner = { ...nextPartner, relationship: { ...nextPartner.relationship, history: [...nextPartner.relationship.history, { week: game.company.week, year: game.company.year, text: momentText }].slice(-20) } };
+      }
     }
 
     const nextReputation = clamp(Math.round(game.company.reputation + result.repDelta + stableRepBonus + feudRepBonus - wellnessRepPenalty + rivalRepTrickle), 0, 100);
@@ -3271,12 +3568,14 @@ export default function WrestlingGM() {
       roster: stillRoster,
       freeAgents,
       staff: nextStaff,
+      staffPool: nextStaffPool,
       titles: nextTitles,
       tagTeams: nextTagTeams,
       stables: nextStables,
       feuds: nextFeuds,
       relationships: nextRelationships,
       inbox: nextInbox,
+      partner: nextPartner,
       devLog: [...devLogAdds.map((d) => ({ ...d })).reverse(), ...(game.devLog || [])].slice(0, 60),
       worldEvents: [...worldEventAdds, ...(game.worldEvents || [])].slice(0, 120),
       rivals: nextRivalsWithSignings,
@@ -3615,6 +3914,7 @@ export default function WrestlingGM() {
             onOpenRivals={() => setRivalsModalOpen(true)}
             onOpenMedia={() => setMediaModalOpen(true)}
             onOpenInbox={() => setInboxModalOpen(true)}
+            onOpenPartner={() => setPartnerModalOpen(true)}
             onGoRoster={() => { setRosterSubTab('active'); setTab('roster'); }}
             onGoFreeAgents={() => setTab('freeagents')}
             onGoHistory={() => setTab('history')}
@@ -3701,8 +4001,8 @@ export default function WrestlingGM() {
         <FreeAgentModal
           wrestler={freeAgents.find((f) => f.id === selectedFreeAgent.id) || selectedFreeAgent}
           onClose={() => setSelectedFreeAgent(null)}
-          onSign={(id) => { signFreeAgent(id); setSelectedFreeAgent(null); }}
-          funds={company.funds} bossReputation={company.bossReputation}
+          onSign={(id, termId, bonusPct, wagePct) => { signFreeAgent(id, termId, bonusPct, wagePct); setSelectedFreeAgent(null); }}
+          funds={company.funds} bossReputation={company.bossReputation} reputation={company.reputation}
         />
       )}
 
@@ -3772,7 +4072,7 @@ export default function WrestlingGM() {
 
       {/* Rival promotions */}
       {rivalsModalOpen && (
-        <RivalsModal rivals={rivals} company={company} onClose={() => setRivalsModalOpen(false)} onSetRelationship={setRivalRelationship} onSignPact={signTerritoryPact} onBreakPact={breakTerritoryPact} onAcquire={acquireRival} />
+        <RivalsModal rivals={rivals} company={company} onClose={() => setRivalsModalOpen(false)} onSetRelationship={setRivalRelationship} onSignPact={signTerritoryPact} onBreakPact={breakTerritoryPact} onAcquire={acquireRival} onOpenPoach={(rivalId, wrestlerId) => setPoachTarget({ rivalId, wrestlerId })} />
       )}
 
       {/* Wrestling media */}
@@ -3784,6 +4084,25 @@ export default function WrestlingGM() {
       {inboxModalOpen && (
         <InboxModal inbox={game.inbox || []} company={company} onClose={() => setInboxModalOpen(false)} onRespond={respondToInboxOffer} />
       )}
+
+      {/* Partner */}
+      {partnerModalOpen && (
+        <PartnerModal partner={game.partner} onClose={() => setPartnerModalOpen(false)} />
+      )}
+
+      {/* Poach */}
+      {poachTarget && (() => {
+        const rival = rivals.find((r) => r.id === poachTarget.rivalId);
+        const wrestler = rival && (rival.roster || []).find((w) => w.id === poachTarget.wrestlerId);
+        if (!rival || !wrestler) return null;
+        return (
+          <PoachModal
+            wrestler={wrestler} rival={rival} company={company}
+            onClose={() => setPoachTarget(null)}
+            onPoach={(rivalId, wrestlerId, termId, bonusPct, wagePct) => { poachRivalWrestler(rivalId, wrestlerId, termId, bonusPct, wagePct); setPoachTarget(null); }}
+          />
+        );
+      })()}
 
       {/* Developer log */}
       {devLogModalOpen && (
@@ -3828,7 +4147,7 @@ export default function WrestlingGM() {
 /* ============================================================
    DASHBOARD TAB
    ============================================================ */
-function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals, onOpenMedia, onOpenInbox, onGoRoster, onGoFreeAgents, onGoHistory }) {
+function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals, onOpenMedia, onOpenInbox, onOpenPartner, onGoRoster, onGoFreeAgents, onGoHistory }) {
   const { company, roster } = game;
   const injured = roster.filter((w) => w.injury);
   const needsTalk = roster.filter((w) => w.ambition && (w.ambition.status === 'unhappy' || w.ambition.status === 'holdout'));
@@ -3865,8 +4184,8 @@ function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, 
       </div>
 
       {game.partner && (
-        <div className="rounded-lg p-3" style={{ backgroundColor: C.cream, border: `1px solid ${C.line}` }}>
-          <div className="flex items-center justify-between">
+        <button onClick={onOpenPartner} className="w-full text-left rounded-lg p-3" style={{ backgroundColor: C.cream, border: `1px solid ${C.line}` }}>
+          <div className="flex items-center justify-between mb-1">
             <div className="flex items-center gap-2">
               <UserCircle size={15} color={C.gold} />
               <div>
@@ -3874,9 +4193,10 @@ function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, 
                 <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{game.partner.label.toUpperCase()}</p>
               </div>
             </div>
-            <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>BOND {game.partner.bond}</p>
+            <ChevronRight size={16} color={C.inkFaint} />
           </div>
-        </div>
+          <p className="text-[11px]" style={{ color: C.inkFaint }}>{partnerRelationshipReadout(game.partner.relationship)}</p>
+        </button>
       )}
 
       <div>
@@ -4278,14 +4598,15 @@ function PillTab({ active, onClick, children }) {
 }
 
 function TierBadge({ tier }) {
-  const colors = { Rookie: C.steel, 'Mid-Card': '#7A6A3E', Star: C.gold, Legend: C.rope };
-  return <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: colors[tier] }}><span className="wgm-mono text-[9px] font-bold text-white">{tier === 'Mid-Card' ? 'MC' : tier.slice(0, 2).toUpperCase()}</span></div>;
+  const colors = { Jobber: '#5A5248', Rookie: C.steel, 'Mid-Card': '#7A6A3E', Star: C.gold, Legend: C.rope, Celebrity: '#8B5FBF' };
+  const abbr = { Jobber: 'JB', 'Mid-Card': 'MC', Celebrity: 'CE' };
+  return <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: colors[tier] || C.steel }}><span className="wgm-mono text-[9px] font-bold text-white">{abbr[tier] || tier.slice(0, 2).toUpperCase()}</span></div>;
 }
 
 function TierLegend() {
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-3 px-0.5">
-      {[['Rookie', C.steel, 'RO'], ['Mid-Card', '#7A6A3E', 'MC'], ['Star', C.gold, 'ST'], ['Legend', C.rope, 'LE']].map(([label, color, abbr]) => (
+      {[['Jobber', '#5A5248', 'JB'], ['Rookie', C.steel, 'RO'], ['Mid-Card', '#7A6A3E', 'MC'], ['Star', C.gold, 'ST'], ['Legend', C.rope, 'LE'], ['Celebrity', '#8B5FBF', 'CE']].map(([label, color, abbr]) => (
         <div key={label} className="flex items-center gap-1">
           <div className="w-3.5 h-3.5 rounded-full flex items-center justify-center" style={{ backgroundColor: color }}>
             <span className="wgm-mono font-bold text-white" style={{ fontSize: '5px' }}>{abbr}</span>
@@ -4556,12 +4877,14 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
   );
 }
 
-function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation }) {
+function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, reputation }) {
   const [termId, setTermId] = useState('standard');
+  const [bonusPct, setBonusPct] = useState(1);
+  const [wagePct, setWagePct] = useState(1);
   const bossRep = bossReputation !== undefined ? bossReputation : 50;
   const isBigName = wrestler.tier === 'Star' || wrestler.tier === 'Legend';
   const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
-  let cost = wrestler.salary * 2 * (wrestler.signingMult || 1) * term.bonusMult;
+  let cost = wrestler.salary * 2 * (wrestler.signingMult || 1) * term.bonusMult * bonusPct;
   if (hasTrait(wrestler, 'difficult')) cost = Math.round(cost * 1.3);
   if (hasTrait(wrestler, 'company_man')) cost = Math.round(cost * 0.8);
   if (isBigName) {
@@ -4569,6 +4892,8 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation }) {
     else if (bossRep <= 30) cost = Math.round(cost * 1.25);
   }
   cost = Math.round(cost);
+  const weeklyWage = Math.round(wrestler.salary * wagePct);
+  const offerQuality = (bonusPct + wagePct) / 2;
   return (
     <Modal title={wrestler.name} onClose={onClose}>
       <div className="flex items-center gap-2 mb-4">
@@ -4632,16 +4957,36 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation }) {
       )}
 
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>NEGOTIATE THE CONTRACT</p>
-      <div className="space-y-2 mb-5">
-        {CONTRACT_TERMS.map((t) => (
-          <button key={t.id} onClick={() => setTermId(t.id)} className="w-full rounded-lg p-2.5 text-left" style={{ backgroundColor: termId === t.id ? C.gold : C.canvasAlt, border: `1px solid ${C.line}` }}>
-            <p className="text-xs font-bold" style={{ color: termId === t.id ? C.ink : C.ink }}>{t.label}</p>
-            <p className="text-[10px]" style={{ color: termId === t.id ? C.inkSoft : C.inkFaint }}>{t.blurb}</p>
-          </button>
-        ))}
+      <div className="space-y-2 mb-4">
+        {CONTRACT_TERMS.map((t) => {
+          const fit = negotiationFit(wrestler.character, t.id, offerQuality, reputation);
+          return (
+            <button key={t.id} onClick={() => setTermId(t.id)} className="w-full rounded-lg p-2.5 text-left" style={{ backgroundColor: termId === t.id ? C.gold : C.canvasAlt, border: `1px solid ${C.line}` }}>
+              <p className="text-xs font-bold" style={{ color: termId === t.id ? C.ink : C.ink }}>{t.label}</p>
+              <p className="text-[10px]" style={{ color: termId === t.id ? C.inkSoft : C.inkFaint }}>{t.blurb}</p>
+              <p className="text-[10px] italic mt-1" style={{ color: termId === t.id ? C.inkSoft : (fit >= 45 ? C.good : C.rope) }}>{negotiationFitHint(fit)}</p>
+            </button>
+          );
+        })}
       </div>
 
-      <PrimaryButton full icon={UserPlus} onClick={() => onSign(wrestler.id, termId)} disabled={funds < cost}>Sign for {money(cost)}</PrimaryButton>
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>SIGNING BONUS</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{money(cost)} ({Math.round(bonusPct * 100)}%)</span>
+        </div>
+        <input type="range" min="0.5" max="1.5" step="0.05" value={bonusPct} onChange={(e) => setBonusPct(Number(e.target.value))} className="w-full" />
+      </div>
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>WEEKLY WAGE</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{money(weeklyWage)}/wk ({Math.round(wagePct * 100)}%)</span>
+        </div>
+        <input type="range" min="0.8" max="1.3" step="0.05" value={wagePct} onChange={(e) => setWagePct(Number(e.target.value))} className="w-full" />
+      </div>
+      <p className="text-[11px] mb-3" style={{ color: C.inkFaint }}>A bad fit isn't a guaranteed no — but the further off it is, the more likely they walk. Offering above their ask (or below it) moves that either way.</p>
+
+      <PrimaryButton full icon={UserPlus} onClick={() => onSign(wrestler.id, termId, bonusPct, wagePct)} disabled={funds < cost}>Sign for {money(cost)}</PrimaryButton>
     </Modal>
   );
 }
@@ -6159,6 +6504,36 @@ function DevLogModal({ devLog, onClose }) {
   );
 }
 
+function PartnerModal({ partner, onClose }) {
+  if (!partner) return null;
+  const rel = partner.relationship || {};
+  return (
+    <Modal title={partner.name} onClose={onClose}>
+      <p className="wgm-mono text-[10px] mb-3" style={{ color: C.inkFaint }}>{partner.label.toUpperCase()}</p>
+      <p className="text-xs italic mb-4" style={{ color: C.inkFaint }}>{partner.dream}</p>
+
+      <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.canvasAlt }}>
+        <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>WHERE THINGS STAND</p>
+        <p className="text-sm" style={{ color: C.ink }}>{partnerRelationshipReadout(rel)}</p>
+      </div>
+
+      {rel.history && rel.history.length > 0 && (
+        <div>
+          <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>RELATIONSHIP HISTORY</p>
+          <div className="space-y-1.5 max-h-64 overflow-y-auto wgm-scrollbar">
+            {[...rel.history].reverse().map((h, i) => (
+              <div key={i} className="rounded-md p-2" style={{ backgroundColor: C.canvasAlt }}>
+                <p className="wgm-mono text-[8px] mb-0.5" style={{ color: C.inkFaint }}>WEEK {h.week}, YEAR {h.year}</p>
+                <p className="text-[11px]" style={{ color: C.ink }}>{h.text}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function InboxModal({ inbox, company, onClose, onRespond }) {
   return (
     <Modal title="Inbox" onClose={onClose} wide>
@@ -6187,7 +6562,66 @@ function InboxModal({ inbox, company, onClose, onRespond }) {
   );
 }
 
-function RivalsModal({ rivals, company, onClose, onSetRelationship, onSignPact, onBreakPact, onAcquire }) {
+function PoachModal({ wrestler, rival, company, onClose, onPoach }) {
+  const [termId, setTermId] = useState('standard');
+  const [bonusPct, setBonusPct] = useState(1);
+  const [wagePct, setWagePct] = useState(1);
+  const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
+  const cost = Math.round(wrestler.salary * 2.5 * term.bonusMult * bonusPct);
+  const weeklyWage = Math.round(wrestler.salary * wagePct * 1.1);
+  const offerQuality = (bonusPct + wagePct) / 2;
+  const chance = poachSuccessChance(wrestler, rival, company, termId, offerQuality);
+  const chanceLabel = chance >= 0.6 ? 'Good odds' : chance >= 0.3 ? 'A real shot' : 'A long shot';
+  const chanceColor = chance >= 0.6 ? C.good : chance >= 0.3 ? C.gold : C.rope;
+  return (
+    <Modal title={`Approach ${wrestler.name}`} onClose={onClose}>
+      <p className="text-xs mb-1" style={{ color: C.inkFaint }}>Currently with {rival.name}</p>
+      <p className="wgm-mono text-[10px] mb-4" style={{ color: C.inkFaint }}>{wrestler.contractWeeksLeft} WEEKS LEFT ON CONTRACT · {wrestler.rivalHappiness < 35 ? 'UNHAPPY THERE' : wrestler.rivalHappiness >= 70 ? 'CONTENT THERE' : 'STEADY THERE'}</p>
+
+      {wrestler.character && (
+        <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.canvasAlt }}>
+          <p className="text-[12px]" style={{ color: C.ink }}>{characterReadout(wrestler.character)}</p>
+        </div>
+      )}
+
+      <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>YOUR OFFER</p>
+      <div className="space-y-2 mb-4">
+        {CONTRACT_TERMS.map((t) => (
+          <button key={t.id} onClick={() => setTermId(t.id)} className="w-full rounded-lg p-2.5 text-left" style={{ backgroundColor: termId === t.id ? C.gold : C.canvasAlt, border: `1px solid ${C.line}` }}>
+            <p className="text-xs font-bold" style={{ color: C.ink }}>{t.label}</p>
+            <p className="text-[10px]" style={{ color: termId === t.id ? C.inkSoft : C.inkFaint }}>{t.blurb}</p>
+          </button>
+        ))}
+      </div>
+
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>SIGNING BONUS</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{money(cost)} ({Math.round(bonusPct * 100)}%)</span>
+        </div>
+        <input type="range" min="0.5" max="1.5" step="0.05" value={bonusPct} onChange={(e) => setBonusPct(Number(e.target.value))} className="w-full" />
+      </div>
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>WEEKLY WAGE</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{money(weeklyWage)}/wk ({Math.round(wagePct * 100)}%)</span>
+        </div>
+        <input type="range" min="0.8" max="1.3" step="0.05" value={wagePct} onChange={(e) => setWagePct(Number(e.target.value))} className="w-full" />
+      </div>
+
+      <div className="flex items-center justify-between mb-4 rounded-lg p-3" style={{ backgroundColor: C.canvasAlt }}>
+        <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>ESTIMATED ODDS</span>
+        <span className="wgm-display text-sm" style={{ color: chanceColor }}>{chanceLabel}</span>
+      </div>
+      <p className="text-[11px] mb-4" style={{ color: C.inkFaint }}>Funds are only spent if they say yes. Poaching a promotion's talent won't do your relationship with them any favors.</p>
+
+      <PrimaryButton full icon={UserPlus} onClick={() => onPoach(rival.id, wrestler.id, termId, bonusPct, wagePct)} disabled={company.funds < cost}>Make the Offer ({money(cost)})</PrimaryButton>
+    </Modal>
+  );
+}
+
+function RivalsModal({ rivals, company, onClose, onSetRelationship, onSignPact, onBreakPact, onAcquire, onOpenPoach }) {
+  const [expandedRivalId, setExpandedRivalId] = useState(null);
   const ranked = [
     { id: 'player', name: company.name, reputation: company.reputation, isPlayer: true },
     ...rivals.map((r) => ({ id: r.id, name: r.name, reputation: r.reputation, isPlayer: false })),
@@ -6248,11 +6682,38 @@ function RivalsModal({ rivals, company, onClose, onSetRelationship, onSignPact, 
                       </button>
                     ))}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 mb-2">
                     <GhostButton onClick={() => onSignPact(r.id)} disabled={company.funds < TERRITORY_PACT_COST}>Territory Pact ({money(TERRITORY_PACT_COST)})</GhostButton>
                     <GhostButton danger onClick={() => onAcquire(r.id)} disabled={company.funds < acqCost}>Acquire ({money(acqCost)})</GhostButton>
                   </div>
                 </>
+              )}
+
+              <button onClick={() => setExpandedRivalId(expandedRivalId === r.id ? null : r.id)} className="wgm-mono text-[9px] underline" style={{ color: C.inkFaint }}>
+                {expandedRivalId === r.id ? 'HIDE ROSTER' : `VIEW ROSTER (${(r.roster || []).length})`}
+              </button>
+
+              {expandedRivalId === r.id && (
+                <div className="mt-2 space-y-1.5">
+                  {(r.roster || []).length === 0 && <p className="text-[11px]" style={{ color: C.inkFaint }}>No roster on record.</p>}
+                  {(r.roster || []).map((w) => {
+                    const eligible = !inPact && (w.contractWeeksLeft <= 6 || w.rivalHappiness < 35);
+                    return (
+                      <div key={w.id} className="rounded-md p-2" style={{ backgroundColor: C.canvasAlt }}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <TierBadge tier={w.tier} />
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold truncate" style={{ color: C.ink }}>{w.name}</p>
+                              <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{w.contractWeeksLeft}wk left · {w.rivalHappiness < 35 ? 'unhappy' : w.rivalHappiness >= 70 ? 'content' : 'steady'}</p>
+                            </div>
+                          </div>
+                          {eligible && <GhostButton onClick={() => onOpenPoach(r.id, w.id)}>Approach</GhostButton>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
           );
