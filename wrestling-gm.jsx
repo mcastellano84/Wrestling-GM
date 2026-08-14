@@ -940,7 +940,7 @@ function backgroundSummary(character) {
   const b = character.background;
   return `They ${b.childhood}, ${b.financial}, and ${b.path}. What stays with them most: ${b.memory}.`;
 }
-function negotiationFit(character, termId, offerQuality, reputation) {
+function negotiationFit(character, termId, offerQuality, reputation, contractWeeks) {
   if (!character) return 50;
   const needs = character.needs || [];
   const values = character.values || [];
@@ -971,6 +971,16 @@ function negotiationFit(character, termId, offerQuality, reputation) {
     if (reputation >= 60) score += 8;
     else if (reputation <= 20) score -= 10;
   }
+  if (contractWeeks !== undefined) {
+    if (contractWeeks >= 30) {
+      if (needs.includes('security')) score += 12;
+      if (needs.includes('freedom')) score -= 15;
+      if (d.patience < 40) score -= 8;
+    } else if (contractWeeks <= 12) {
+      if (needs.includes('freedom')) score += 10;
+      if (needs.includes('security')) score -= 15;
+    }
+  }
   return clamp(score, 0, 100);
 }
 function negotiationFitHint(fit) {
@@ -996,13 +1006,13 @@ function negotiationRejectionReason(w, termId) {
   }
   return `${w.name} turns down the offer. It just doesn't sit right with who they are — they value ${VALUE_LABELS[c.values[0]] || c.values[0]} more than what's on the table.`;
 }
-function poachSuccessChance(wrestler, rival, company, termId, offerQuality) {
+function poachSuccessChance(wrestler, rival, company, termId, offerQuality, contractWeeks) {
   let chance = 0.12;
   chance += clamp((10 - wrestler.contractWeeksLeft) / 10, 0, 1) * 0.22;
   chance += clamp((50 - wrestler.rivalHappiness) / 50, 0, 1) * 0.25;
   chance += (offerQuality - 1) * 0.25;
   chance += clamp((company.reputation - rival.reputation) / 250, -0.1, 0.1);
-  const fit = negotiationFit(wrestler.character, termId, offerQuality, company.reputation);
+  const fit = negotiationFit(wrestler.character, termId, offerQuality, company.reputation, contractWeeks);
   chance += (fit - 50) / 250;
   return clamp(chance, 0.03, 0.85);
 }
@@ -2456,7 +2466,7 @@ export default function WrestlingGM() {
     });
     showToast('Gave a raise.');
   }
-  function signFreeAgent(id, termId, bonusPct = 1, wagePct = 1) {
+  function signFreeAgent(id, termId, bonusPct = 1, wagePct = 1, contractWeeks = 18) {
     let outcome = 'none';
     updateGame((g) => {
       if (!canActToday(g.company)) { showToast('No time left this week to sign anyone — run the show or wait for next week.'); return g; }
@@ -2475,7 +2485,7 @@ export default function WrestlingGM() {
       const weeklyWage = Math.round(w.salary * wagePct);
       if (g.company.funds < bonus) { showToast('Not enough funds for the signing bonus.'); return g; }
       const offerQuality = (bonusPct + wagePct) / 2;
-      const fit = negotiationFit(w.character, term.id, offerQuality, g.company.reputation);
+      const fit = negotiationFit(w.character, term.id, offerQuality, g.company.reputation, contractWeeks);
       if (Math.random() < negotiationRejectionChance(fit)) {
         outcome = 'rejected';
         return tickOneDay({ ...g, news: [negotiationRejectionReason(w, term.id), ...g.news].slice(0, 30) });
@@ -2495,7 +2505,7 @@ export default function WrestlingGM() {
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
-        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: randInt(12, 26), contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline }].slice(-20) }],
+        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline }].slice(-20) }],
         freeAgents: g.freeAgents.filter((f) => f.id !== id),
         relationships,
       });
@@ -2708,7 +2718,7 @@ export default function WrestlingGM() {
     });
     showToast('Promotion acquired.');
   }
-  function poachRivalWrestler(rivalId, wrestlerId, termId, bonusPct = 1, wagePct = 1) {
+  function poachRivalWrestler(rivalId, wrestlerId, termId, bonusPct = 1, wagePct = 1, contractWeeks = 18) {
     let outcome = 'none';
     updateGame((g) => {
       if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
@@ -2725,7 +2735,7 @@ export default function WrestlingGM() {
       const weeklyWage = Math.round(w.salary * wagePct * 1.1);
       if (g.company.funds < bonus) { showToast('Not enough funds for this offer.'); return g; }
       const offerQuality = (bonusPct + wagePct) / 2;
-      const chance = poachSuccessChance(w, rival, g.company, term.id, offerQuality);
+      const chance = poachSuccessChance(w, rival, g.company, term.id, offerQuality, contractWeeks);
       if (Math.random() >= chance) {
         outcome = 'failed';
         return tickOneDay({ ...g, news: [`${w.name} decided to stay with ${rival.name} — the offer wasn't enough to pull them away.`, ...g.news].slice(0, 30) });
@@ -2737,7 +2747,7 @@ export default function WrestlingGM() {
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus, bossReputation: bumpBossRep(g, -1) },
-        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: randInt(12, 26), contractPromise, discoveredVia: `poached from ${rival.name}`, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Poached away from ${rival.name}.` }].slice(-20) }],
+        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, discoveredVia: `poached from ${rival.name}`, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Poached away from ${rival.name}.` }].slice(-20) }],
         rivals: g.rivals.map((r) => (r.id === rivalId ? {
           ...r,
           roster: (r.roster || []).filter((x) => x.id !== wrestlerId),
@@ -4001,7 +4011,7 @@ export default function WrestlingGM() {
         <FreeAgentModal
           wrestler={freeAgents.find((f) => f.id === selectedFreeAgent.id) || selectedFreeAgent}
           onClose={() => setSelectedFreeAgent(null)}
-          onSign={(id, termId, bonusPct, wagePct) => { signFreeAgent(id, termId, bonusPct, wagePct); setSelectedFreeAgent(null); }}
+          onSign={(id, termId, bonusPct, wagePct, contractWeeks) => { signFreeAgent(id, termId, bonusPct, wagePct, contractWeeks); setSelectedFreeAgent(null); }}
           funds={company.funds} bossReputation={company.bossReputation} reputation={company.reputation}
         />
       )}
@@ -4099,7 +4109,7 @@ export default function WrestlingGM() {
           <PoachModal
             wrestler={wrestler} rival={rival} company={company}
             onClose={() => setPoachTarget(null)}
-            onPoach={(rivalId, wrestlerId, termId, bonusPct, wagePct) => { poachRivalWrestler(rivalId, wrestlerId, termId, bonusPct, wagePct); setPoachTarget(null); }}
+            onPoach={(rivalId, wrestlerId, termId, bonusPct, wagePct, contractWeeks) => { poachRivalWrestler(rivalId, wrestlerId, termId, bonusPct, wagePct, contractWeeks); setPoachTarget(null); }}
           />
         );
       })()}
@@ -4881,6 +4891,7 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, repu
   const [termId, setTermId] = useState('standard');
   const [bonusPct, setBonusPct] = useState(1);
   const [wagePct, setWagePct] = useState(1);
+  const [contractWeeks, setContractWeeks] = useState(18);
   const bossRep = bossReputation !== undefined ? bossReputation : 50;
   const isBigName = wrestler.tier === 'Star' || wrestler.tier === 'Legend';
   const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
@@ -4959,7 +4970,7 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, repu
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>NEGOTIATE THE CONTRACT</p>
       <div className="space-y-2 mb-4">
         {CONTRACT_TERMS.map((t) => {
-          const fit = negotiationFit(wrestler.character, t.id, offerQuality, reputation);
+          const fit = negotiationFit(wrestler.character, t.id, offerQuality, reputation, contractWeeks);
           return (
             <button key={t.id} onClick={() => setTermId(t.id)} className="w-full rounded-lg p-2.5 text-left" style={{ backgroundColor: termId === t.id ? C.gold : C.canvasAlt, border: `1px solid ${C.line}` }}>
               <p className="text-xs font-bold" style={{ color: termId === t.id ? C.ink : C.ink }}>{t.label}</p>
@@ -4984,9 +4995,17 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, repu
         </div>
         <input type="range" min="0.8" max="1.3" step="0.05" value={wagePct} onChange={(e) => setWagePct(Number(e.target.value))} className="w-full" />
       </div>
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>CONTRACT LENGTH</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{contractWeeks} weeks</span>
+        </div>
+        <input type="range" min="8" max="40" step="2" value={contractWeeks} onChange={(e) => setContractWeeks(Number(e.target.value))} className="w-full" />
+        <p className="text-[10px] mt-1" style={{ color: C.inkFaint }}>Longer deals appeal to anyone craving security — and can put off anyone craving freedom.</p>
+      </div>
       <p className="text-[11px] mb-3" style={{ color: C.inkFaint }}>A bad fit isn't a guaranteed no — but the further off it is, the more likely they walk. Offering above their ask (or below it) moves that either way.</p>
 
-      <PrimaryButton full icon={UserPlus} onClick={() => onSign(wrestler.id, termId, bonusPct, wagePct)} disabled={funds < cost}>Sign for {money(cost)}</PrimaryButton>
+      <PrimaryButton full icon={UserPlus} onClick={() => onSign(wrestler.id, termId, bonusPct, wagePct, contractWeeks)} disabled={funds < cost}>Sign for {money(cost)}</PrimaryButton>
     </Modal>
   );
 }
@@ -6566,11 +6585,12 @@ function PoachModal({ wrestler, rival, company, onClose, onPoach }) {
   const [termId, setTermId] = useState('standard');
   const [bonusPct, setBonusPct] = useState(1);
   const [wagePct, setWagePct] = useState(1);
+  const [contractWeeks, setContractWeeks] = useState(18);
   const term = CONTRACT_TERMS.find((t) => t.id === termId) || CONTRACT_TERMS[0];
   const cost = Math.round(wrestler.salary * 2.5 * term.bonusMult * bonusPct);
   const weeklyWage = Math.round(wrestler.salary * wagePct * 1.1);
   const offerQuality = (bonusPct + wagePct) / 2;
-  const chance = poachSuccessChance(wrestler, rival, company, termId, offerQuality);
+  const chance = poachSuccessChance(wrestler, rival, company, termId, offerQuality, contractWeeks);
   const chanceLabel = chance >= 0.6 ? 'Good odds' : chance >= 0.3 ? 'A real shot' : 'A long shot';
   const chanceColor = chance >= 0.6 ? C.good : chance >= 0.3 ? C.gold : C.rope;
   return (
@@ -6608,6 +6628,13 @@ function PoachModal({ wrestler, rival, company, onClose, onPoach }) {
         </div>
         <input type="range" min="0.8" max="1.3" step="0.05" value={wagePct} onChange={(e) => setWagePct(Number(e.target.value))} className="w-full" />
       </div>
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>CONTRACT LENGTH</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{contractWeeks} weeks</span>
+        </div>
+        <input type="range" min="8" max="40" step="2" value={contractWeeks} onChange={(e) => setContractWeeks(Number(e.target.value))} className="w-full" />
+      </div>
 
       <div className="flex items-center justify-between mb-4 rounded-lg p-3" style={{ backgroundColor: C.canvasAlt }}>
         <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>ESTIMATED ODDS</span>
@@ -6615,7 +6642,7 @@ function PoachModal({ wrestler, rival, company, onClose, onPoach }) {
       </div>
       <p className="text-[11px] mb-4" style={{ color: C.inkFaint }}>Funds are only spent if they say yes. Poaching a promotion's talent won't do your relationship with them any favors.</p>
 
-      <PrimaryButton full icon={UserPlus} onClick={() => onPoach(rival.id, wrestler.id, termId, bonusPct, wagePct)} disabled={company.funds < cost}>Make the Offer ({money(cost)})</PrimaryButton>
+      <PrimaryButton full icon={UserPlus} onClick={() => onPoach(rival.id, wrestler.id, termId, bonusPct, wagePct, contractWeeks)} disabled={company.funds < cost}>Make the Offer ({money(cost)})</PrimaryButton>
     </Modal>
   );
 }
