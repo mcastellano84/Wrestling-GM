@@ -161,7 +161,9 @@ const TIER_CONFIG = {
 };
 
 const VENUE_TIERS = [
+  { id: 'backyard', name: 'Backyard', capacity: 60, rent: 0, minRep: 0 },
   { id: 'gym', name: 'High School Gym', capacity: 150, rent: 250, minRep: 0 },
+  { id: 'warehouse', name: 'Leased Warehouse', capacity: 220, rent: 380, minRep: 4 },
   { id: 'legion', name: 'Legion Hall', capacity: 350, rent: 600, minRep: 8 },
   { id: 'armory', name: 'National Guard Armory', capacity: 800, rent: 1600, minRep: 20 },
   { id: 'community', name: 'Community Arena', capacity: 1800, rent: 4200, minRep: 35 },
@@ -169,10 +171,15 @@ const VENUE_TIERS = [
   { id: 'sports', name: 'Sports Arena', capacity: 12000, rent: 30000, minRep: 75 },
   { id: 'stadium', name: 'Stadium', capacity: 35000, rent: 90000, minRep: 92 },
 ];
+// Venues flagged `private: true` belong exclusively to the player (never shown to/contested by
+// rival promotions, never rolled into company.unavailableVenueIds, always bookable). Everything
+// else is a shared physical space other promotions in the region can also book out from under you.
 const ALL_VENUES = [
+  { id: 'backyard', tierId: 'backyard', name: 'Your Backyard', capacity: 60, rent: 0, minRep: 0, crowdLean: null, private: true },
   { id: 'gym', tierId: 'gym', name: 'High School Gym', capacity: 150, rent: 250, minRep: 0, crowdLean: null },
   { id: 'gym_deathmatch', tierId: 'gym', name: 'Rusty Machine Shop', capacity: 150, rent: 213, minRep: 0, crowdLean: 'deathmatch' },
   { id: 'gym_lucha', tierId: 'gym', name: 'Parish Community Hall', capacity: 150, rent: 250, minRep: 0, crowdLean: 'lucha' },
+  { id: 'warehouse', tierId: 'warehouse', name: 'Leased Warehouse', capacity: 220, rent: 380, minRep: 4, crowdLean: null },
   { id: 'legion', tierId: 'legion', name: 'Legion Hall', capacity: 350, rent: 600, minRep: 8, crowdLean: null },
   { id: 'legion_strong_style', tierId: 'legion', name: 'Dojo Fight Center', capacity: 350, rent: 600, minRep: 8, crowdLean: 'strong_style' },
   { id: 'legion_sports_entertainment', tierId: 'legion', name: 'Downtown Rec Center', capacity: 350, rent: 660, minRep: 8, crowdLean: 'sports_entertainment' },
@@ -492,9 +499,9 @@ const RING_ORIGINS = [
   { id: 'new', label: 'Bought New', blurb: 'Brand new, built to spec. Costs real money, but it shows.', cost: 3500, ringLevel: 3 },
 ];
 const STARTUP_VENUE_PATHS = [
-  { id: 'backyard', label: 'Backyard Shows', cost: 0, repBonus: 0, blurb: "Free, and nobody's watching yet. You build an audience one lawn chair at a time." },
-  { id: 'gym_rental', label: 'Rent the School Gym', cost: 400, repBonus: 2, blurb: 'A real room with real folding chairs. Costs something, but people take you a little more seriously.' },
-  { id: 'warehouse_lease', label: 'Lease a Warehouse', cost: 1800, repBonus: 5, blurb: "Your own space — four walls and a roof. Real overhead, but it's yours from day one." },
+  { id: 'backyard', label: 'Backyard Shows', cost: 0, repBonus: 0, venueId: 'backyard', blurb: "Free, and it's always yours — nobody can book it out from under you. Nobody's watching yet, either. You build an audience one lawn chair at a time." },
+  { id: 'gym_rental', label: 'Rent the School Gym', cost: 400, repBonus: 2, venueId: 'gym', blurb: 'A real room with real folding chairs. Costs something, but people take you a little more seriously — and it starts you off as your home venue.' },
+  { id: 'warehouse_lease', label: 'Lease a Warehouse', cost: 1800, repBonus: 6, venueId: 'warehouse', blurb: "A bigger space than the gym floor, and it's your home venue from day one. It's still a shared building though — other promotions in town can book it when you're not using it." },
 ];
 const STARTUP_RECRUITING_METHODS = [
   { id: 'magazine_ad', label: 'Wrestling Magazine Ad', cost: 150, statBias: null },
@@ -1602,7 +1609,8 @@ function tickOneDay(g) {
 
   const unavailable = new Set(company.unavailableVenueIds || []);
   const lockedVenueId = g.draftShow.venueId;
-  const availableNow = unlockedVenuesFor(company, g.rivals).filter((v) => v.id !== lockedVenueId && !unavailable.has(v.id));
+  // Private venues (the backyard) are exempt: nobody else can book out from under you.
+  const availableNow = unlockedVenuesFor(company, g.rivals).filter((v) => v.id !== lockedVenueId && !unavailable.has(v.id) && !v.private);
   if (availableNow.length > 1 && Math.random() < 0.14) {
     const taken = pick(availableNow);
     unavailable.add(taken.id);
@@ -2049,7 +2057,7 @@ function createNewGame(opts) {
     worldEvents: [],
     history: [],
     news: openingNews,
-    draftShow: makeEmptyDraft(),
+    draftShow: { ...makeEmptyDraft(), venueId: venuePath.venueId || 'gym' },
   };
 }
 
@@ -5215,7 +5223,7 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
                 return (
                   <button key={v.id} onClick={() => onUpdateDraft({ venueId: v.id })} className="rounded-md p-2 text-left" style={{ backgroundColor: draftShow.venueId === v.id ? C.ink : C.cream, border: `1px solid ${v.crowdLean ? (isHome ? C.gold : C.rope) : C.line}` }}>
                     <p className="text-xs font-semibold" style={{ color: draftShow.venueId === v.id ? C.gold : C.ink }}>{v.name}</p>
-                    <p className="wgm-mono text-[9px]" style={{ color: draftShow.venueId === v.id ? 'rgba(246,240,225,0.6)' : C.inkFaint }}>Cap {v.capacity.toLocaleString()} · {money(v.rent)} rent</p>
+                    <p className="wgm-mono text-[9px]" style={{ color: draftShow.venueId === v.id ? 'rgba(246,240,225,0.6)' : C.inkFaint }}>Cap {v.capacity.toLocaleString()} · {v.rent === 0 ? 'FREE' : `${money(v.rent)} rent`}{v.private ? ' · YOURS' : ''}</p>
                     {leanLabel && (
                       <p className="wgm-mono text-[9px] mt-0.5" style={{ color: draftShow.venueId === v.id ? (isHome ? C.gold : '#E8897A') : (isHome ? C.gold : C.rope) }}>
                         {isHome ? `HOME CROWD · ${leanLabel.toUpperCase()}` : `${leanLabel.toUpperCase()} CROWD · MISMATCH`}
@@ -6083,7 +6091,7 @@ function ShopTab({
                       return (
                         <div key={v.id} className="wgm-price-tag rounded-lg p-2.5" style={{ backgroundColor: isUnlocked ? C.cream : C.canvasAlt, border: `1px solid ${v.crowdLean ? (isHome ? C.gold : C.rope) : C.line}`, opacity: isUnlocked ? 1 : 0.55 }}>
                           <p className="text-xs font-semibold" style={{ color: C.ink }}>{v.name}</p>
-                          <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{money(v.rent)} rent</p>
+                          <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{v.rent === 0 ? 'FREE' : `${money(v.rent)} rent`}{v.private ? ' · PRIVATE — YOURS ALONE' : ''}</p>
                           {leanLabel && <p className="wgm-mono text-[9px] mt-0.5" style={{ color: isHome ? C.gold : C.rope }}>{isHome ? 'HOME CROWD' : `${leanLabel.toUpperCase()} CROWD`}</p>}
                           {!isUnlocked && <p className="wgm-mono text-[9px] mt-0.5" style={{ color: C.rope }}>Needs {tier.minRep} rep</p>}
                         </div>
