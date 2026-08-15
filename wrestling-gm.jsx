@@ -159,6 +159,38 @@ const TIER_CONFIG = {
   Legend: { statRange: [80, 97], popRange: [70, 97], salaryRange: [1600, 3800], ageRange: [35, 48], confRange: [75, 95] },
   Celebrity: { statRange: [18, 42], popRange: [55, 90], salaryRange: [900, 2200], ageRange: [24, 50], confRange: [55, 85], charismaFloor: 70 },
 };
+// Card standing (Phase 8): promotion/demotion is an output of sustained popularity, not a
+// fixed label. Celebrity is a flavor tier and doesn't progress through this ladder.
+const TIER_ORDER = ['Jobber', 'Rookie', 'Mid-Card', 'Star', 'Legend'];
+const TIER_PROMOTE_THRESHOLD = { Jobber: 10, Rookie: 20, 'Mid-Card': 45, Star: 72 };
+const TIER_DEMOTE_THRESHOLD = { Rookie: 2, 'Mid-Card': 12, Star: 35, Legend: 65 };
+const TIER_TREND_WEEKS_NEEDED = 5;
+function tickTierProgression(w) {
+  if (w.tier === 'Celebrity') return { tier: w.tier, tierTrendWeeks: 0, event: null };
+  const idx = TIER_ORDER.indexOf(w.tier);
+  const promoteThresh = TIER_PROMOTE_THRESHOLD[w.tier];
+  const demoteThresh = TIER_DEMOTE_THRESHOLD[w.tier];
+  let trend = w.tierTrendWeeks || 0;
+  if (promoteThresh !== undefined && w.popularity >= promoteThresh) {
+    trend = trend > 0 ? trend + 1 : 1;
+  } else if (demoteThresh !== undefined && w.popularity <= demoteThresh) {
+    trend = trend < 0 ? trend - 1 : -1;
+  } else {
+    trend = 0;
+  }
+  let tier = w.tier;
+  let event = null;
+  if (trend >= TIER_TREND_WEEKS_NEEDED && idx < TIER_ORDER.length - 1) {
+    tier = TIER_ORDER[idx + 1];
+    trend = 0;
+    event = 'promoted';
+  } else if (trend <= -TIER_TREND_WEEKS_NEEDED && idx > 0) {
+    tier = TIER_ORDER[idx - 1];
+    trend = 0;
+    event = 'demoted';
+  }
+  return { tier, tierTrendWeeks: trend, event };
+}
 
 const VENUE_TIERS = [
   { id: 'backyard', name: 'Backyard', capacity: 60, rent: 0, minRep: 0 },
@@ -380,8 +412,24 @@ function nudgePartnerRelationship(relationship, deltas, reasonText, week, year) 
     sharedVision: clamp(relationship.sharedVision + (deltas.sharedVision || 0), 0, 100),
     history: relationship.history,
   };
-  if (reasonText) next.history = [...relationship.history, { week, year, text: reasonText }].slice(-20);
+  if (reasonText) {
+    // Importance/valence derived from the actual size and direction of the sentiment shift,
+    // so the memory that gets remembered later is proportionate to how much it actually mattered.
+    const total = (deltas.trust || 0) + (deltas.respect || 0) + (deltas.affection || 0) + (deltas.sharedVision || 0);
+    const importance = clamp(Math.round(Math.abs(total) * 1.5) + 3, 1, 10);
+    const valence = total > 0 ? 1 : total < 0 ? -1 : 0;
+    next.history = [...relationship.history, { week, year, text: reasonText, importance, valence }].slice(-20);
+  }
   return next;
+}
+// "What they'd say about you" — a hidden readout fed by the memory log itself, not just
+// the live sentiment numbers (Phase 6: memories, not only current-state stats).
+function partnerWouldSay(partner) {
+  const history = (partner.relationship || {}).history || [];
+  if (!history.length) return `${partner.name} doesn't have much history with you yet — it's still early.`;
+  const top = [...history].sort((a, b) => (b.importance || 3) - (a.importance || 3))[0];
+  const lean = top.valence > 0 ? 'still brings up' : top.valence < 0 ? "hasn't forgotten" : 'remembers';
+  return `If you asked ${partner.name} what stands out most, they'd say they ${lean}: "${top.text}"`;
 }
 function partnerShowDeltas(archetypeId, avgStars, netProfit) {
   const deltas = {};
@@ -594,11 +642,22 @@ function computeMerchResult(company, roster, attendance) {
     if (assigned.length && grossProfit > 0) {
       const totalRoyalty = Math.round(grossProfit * MERCH_ROYALTY_RATE);
       itemNet -= totalRoyalty;
-      const popSum = sum(assigned.map((w) => w.popularity));
-      assigned.forEach((w) => {
-        const share = popSum > 0 ? w.popularity / popSum : 1 / assigned.length;
-        royalties[w.id] = (royalties[w.id] || 0) + Math.round(totalRoyalty * share);
-      });
+      const allocations = entry.allocations || null;
+      const hasCustomSplit = allocations && assigned.some((w) => allocations[w.id] > 0);
+      if (hasCustomSplit) {
+        // Deliberate per-wrestler weights (Phase 8) instead of an implicit popularity split.
+        const weightSum = sum(assigned.map((w) => allocations[w.id] || 0));
+        assigned.forEach((w) => {
+          const share = weightSum > 0 ? (allocations[w.id] || 0) / weightSum : 1 / assigned.length;
+          royalties[w.id] = (royalties[w.id] || 0) + Math.round(totalRoyalty * share);
+        });
+      } else {
+        const popSum = sum(assigned.map((w) => w.popularity));
+        assigned.forEach((w) => {
+          const share = popSum > 0 ? w.popularity / popSum : 1 / assigned.length;
+          royalties[w.id] = (royalties[w.id] || 0) + Math.round(totalRoyalty * share);
+        });
+      }
     }
     net += Math.max(0, itemNet);
   });
@@ -947,7 +1006,42 @@ function backgroundSummary(character) {
   const b = character.background;
   return `They ${b.childhood}, ${b.financial}, and ${b.path}. What stays with them most: ${b.memory}.`;
 }
-function negotiationFit(character, termId, offerQuality, reputation, contractWeeks) {
+// Personal memory (Phase 6): the single most important thing that's happened to this
+// wrestler in-world, not just their pre-game backstory. Old-save entries without
+// importance tags default to mid-importance so they can still surface.
+function wrestlerDefiningMemory(storyline) {
+  if (!storyline || !storyline.length) return null;
+  return [...storyline].sort((a, b) => (b.importance !== undefined ? b.importance : 5) - (a.importance !== undefined ? a.importance : 5))[0];
+}
+// Curated view over the raw log (top N by importance, most recent as tiebreak) — kept as a
+// derived read rather than a second persisted array for this v1, so significance can still
+// be revised just by adjusting how entries are scored, without a migration. See HANDOFF notes.
+function wrestlerTopMemories(storyline, n = 3) {
+  if (!storyline || !storyline.length) return [];
+  return [...storyline]
+    .sort((a, b) => (b.importance !== undefined ? b.importance : 5) - (a.importance !== undefined ? a.importance : 5) || (b.year * 52 + b.week) - (a.year * 52 + a.week))
+    .slice(0, n);
+}
+// A soft narrative label, not a rigid age class — derived from age, wellness history, and
+// recent memories so it can move backward as well as forward (Phase 7: life/career arcs).
+function wrestlerLifeChapter(w) {
+  const wellness = w.wellness || {};
+  const programCount = w.wellnessProgramCount || 0;
+  const recentNegative = wrestlerDefiningMemory(w.storyline);
+  if (wellness.status === 'struggling') return 'The Fall';
+  if (wellness.status === 'in_program') return 'Taking Time Away';
+  if (programCount > 0 && wellness.status === 'stable' && (wellness.weeksSinceProgram || 99) <= 20) return 'Rebuilding';
+  if (w.age >= 40) return 'Passing the Torch';
+  if (w.age >= 34) return 'Veteran Years';
+  if ((w.tier === 'Star' || w.tier === 'Legend') && w.popularity >= 65) return 'Peak Years';
+  if (w.age <= 25 && (w.matchesWrestled || 0) < 25) return 'Rising';
+  if (recentNegative && recentNegative.valence < 0 && (recentNegative.importance || 0) >= 8) return 'A Setback';
+  return 'Building a Career';
+}
+function weeksBetween(week1, year1, week2, year2) {
+  return (year2 - year1) * 52 + (week2 - week1);
+}
+function negotiationFit(character, termId, offerQuality, reputation, contractWeeks, storyline) {
   if (!character) return 50;
   const needs = character.needs || [];
   const values = character.values || [];
@@ -988,6 +1082,13 @@ function negotiationFit(character, termId, offerQuality, reputation, contractWee
       if (needs.includes('security')) score -= 15;
     }
   }
+  // A remembered broken promise makes them warier of another one, especially the same kind
+  // of promise all over again (Phase 6: memories feeding into a real decision, not just flavor).
+  const brokenPromise = (storyline || []).find((e) => e.type === 'promise' && e.valence < 0 && (e.importance || 0) >= 6);
+  if (brokenPromise) {
+    if (termId === 'promise_title' || termId === 'creative_control') score -= 20;
+    else score -= 6;
+  }
   return clamp(score, 0, 100);
 }
 function negotiationFitHint(fit) {
@@ -1002,6 +1103,10 @@ function negotiationRejectionChance(fit) {
 function negotiationRejectionReason(w, termId) {
   const c = w.character;
   if (!c) return `${w.name} turns down the offer.`;
+  const brokenPromise = (w.storyline || []).find((e) => e.type === 'promise' && e.valence < 0 && (e.importance || 0) >= 6);
+  if (brokenPromise && (termId === 'promise_title' || termId === 'creative_control')) {
+    return `${w.name} turns it down. They remember what happened last time someone made them a promise around here.`;
+  }
   if (termId === 'standard' && (c.needs.includes('freedom') || c.needs.includes('recognition'))) {
     return `${w.name} turns it down. A flat contract doesn't speak to someone driven by ${NEED_LABELS[c.needs[0]] || c.needs[0]}.`;
   }
@@ -1019,7 +1124,7 @@ function poachSuccessChance(wrestler, rival, company, termId, offerQuality, cont
   chance += clamp((50 - wrestler.rivalHappiness) / 50, 0, 1) * 0.25;
   chance += (offerQuality - 1) * 0.25;
   chance += clamp((company.reputation - rival.reputation) / 250, -0.1, 0.1);
-  const fit = negotiationFit(wrestler.character, termId, offerQuality, company.reputation, contractWeeks);
+  const fit = negotiationFit(wrestler.character, termId, offerQuality, company.reputation, contractWeeks, wrestler.storyline);
   chance += (fit - 50) / 250;
   return clamp(chance, 0.03, 0.85);
 }
@@ -1073,6 +1178,13 @@ function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainmen
 function generateStaff(role) {
   const quality = randInt(35, 92);
   return { id: uid(), name: `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`, role, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait(role), ambition: assignStaffAmbition(), weeksEmployed: 0 };
+}
+// Retirement doesn't have to be a dead end — a veteran's ring knowledge becomes staff
+// quality. Legacy through the people they go on to influence (Phase 7: mentorship/lineage).
+function wrestlerToStaffMember(w, role) {
+  const experienceScore = clamp((w.matchesWrestled || 0) / 2, 0, 30);
+  const quality = clamp(Math.round((w.popularity * 0.4) + ((w.stats && w.stats.charisma) || 50) * 0.3 + experienceScore), 30, 96);
+  return { id: uid(), name: w.name, role, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait(role), ambition: assignStaffAmbition(), weeksEmployed: 0, formerWrestler: true };
 }
 
 function generateFreeAgentPool(regionId = 'usa', styleId = 'sports_entertainment', count = 14, rookieHeavy = false) {
@@ -1258,14 +1370,16 @@ function seedAutoRelationships(roster, week, year) {
 function tickWellness(w) {
   const wellness = w.wellness || { status: 'stable', weeksInStatus: 0 };
   let { status, weeksInStatus } = wellness;
+  let weeksSinceProgram = wellness.weeksSinceProgram !== undefined ? wellness.weeksSinceProgram : 99;
   let news = null;
   let repPenalty = 0;
   const unhappyStreak = (w.ambition && w.ambition.unhappyStreak) || 0;
+  const programCount = w.wellnessProgramCount || 0;
 
   if (status === 'in_program') {
     weeksInStatus += 1;
     if (weeksInStatus >= 5) {
-      status = 'stable'; weeksInStatus = 0;
+      status = 'stable'; weeksInStatus = 0; weeksSinceProgram = 0;
       news = `${w.name} has completed their time away and is ready to return to the ring.`;
     }
   } else if (status === 'struggling') {
@@ -1276,12 +1390,33 @@ function tickWellness(w) {
       news = `${w.name} seems to have turned things around on their own — morale's back up.`;
     }
   } else {
-    if (unhappyStreak >= 20 && w.morale <= 25) {
+    weeksSinceProgram += 1;
+    // Recovery isn't a straight line: someone recently back from the program can slip again,
+    // and years of physical toll can drag someone down even if nothing "happened" this week.
+    if (programCount > 0 && weeksSinceProgram <= 8 && w.morale <= 40 && Math.random() < 0.1) {
+      status = 'struggling'; weeksInStatus = 0;
+      news = `${w.name} is struggling again. Recovery isn't always a straight line.`;
+    } else if (unhappyStreak >= 20 && w.morale <= 25) {
       status = 'struggling'; weeksInStatus = 0;
       news = `${w.name} appears to be struggling outside the ring. The locker room has noticed.`;
+    } else if ((w.careerInjuries || 0) >= 3 && w.confidence <= 30 && Math.random() < 0.08) {
+      status = 'struggling'; weeksInStatus = 0;
+      news = `Years of injuries are catching up with ${w.name}, and it's starting to show outside the ring too.`;
     }
   }
-  return { wellness: { status, weeksInStatus }, news, repPenalty };
+  return { wellness: { status, weeksInStatus, weeksSinceProgram }, news, repPenalty };
+}
+// Whether someone accepts help the first (or fifth) time it's offered depends on who they
+// are, not just a flat roll — impulsive/independent people are more likely to refuse.
+function wellnessRefusalChance(w) {
+  const d = (w.character || {}).dimensions || {};
+  const needs = (w.character || {}).needs || [];
+  let chance = 0.12;
+  if (d.patience !== undefined && d.patience < 35) chance += 0.15;
+  if (d.riskTolerance !== undefined && d.riskTolerance >= 70) chance += 0.1;
+  if (needs.includes('freedom')) chance += 0.1;
+  if ((w.wellnessProgramCount || 0) >= 2) chance -= 0.1;
+  return clamp(chance, 0.05, 0.5);
 }
 const CONTRACT_TERMS = [
   { id: 'standard', label: 'Standard Contract', bonusMult: 1, blurb: 'Pay the full signing bonus. No strings attached.' },
@@ -1386,6 +1521,34 @@ function generateRivalRoster(region, style, reputation) {
 function flagshipFromRoster(roster) {
   return [...(roster || [])].sort((a, b) => b.popularity - a.popularity).slice(0, 2).map((w) => ({ name: w.name, gimmick: w.gimmick, popularity: w.popularity }));
 }
+// A rival's current biggest roster gap, in plain terms — drives poaching choices and gives
+// world events a real "why" instead of a pure random roll (Phase 5: Living World AI & Motives).
+function rivalRosterNeed(rival) {
+  const roster = rival.roster || [];
+  const bigNames = roster.filter((w) => w.tier === 'Star' || w.tier === 'Legend').length;
+  if (rival.reputation >= 30 && bigNames === 0) return 'Star';
+  if (roster.length < 3) return 'depth';
+  const midCount = roster.filter((w) => w.tier === 'Mid-Card').length;
+  if (midCount < 2 && rival.reputation >= 15) return 'Mid-Card';
+  return 'depth';
+}
+const RIVAL_STRATEGY_FOCUSES = ['grow', 'stabilize', 'aggressive'];
+// The owner's actual behavioral profile drives their strategy, rather than the
+// strategy being an independent random label (Phase 5: rivals have real motives).
+function generateRivalOwner(regionId) {
+  return { name: generateAdvisorName(regionId), character: generateCharacterCore() };
+}
+function deriveRivalStrategy(character) {
+  if (!character) return generateRivalStrategy();
+  const { values, dimensions } = character;
+  let focus = 'grow';
+  if (values.includes('money') || dimensions.competitiveness >= 70) focus = 'aggressive';
+  else if (values.includes('security') || dimensions.riskTolerance <= 35) focus = 'stabilize';
+  return { focus, riskTolerance: Math.round((dimensions.riskTolerance / 100) * 100) / 100 };
+}
+function generateRivalStrategy() {
+  return { focus: pick(RIVAL_STRATEGY_FOCUSES), riskTolerance: Math.round((0.3 + Math.random() * 0.6) * 100) / 100 };
+}
 function generateRivalPromotions(count = 5) {
   const usedNames = new Set();
   return Array.from({ length: count }, () => {
@@ -1396,12 +1559,16 @@ function generateRivalPromotions(count = 5) {
     const style = pick(STYLE_LIST).id;
     const reputation = randInt(10, 55);
     const roster = generateRivalRoster(region, style, reputation);
+    const owner = generateRivalOwner(region);
     return {
       id: uid(),
       name,
       region, style, reputation,
       momentum: randInt(-1, 1),
       relationship: 'neutral',
+      owner,
+      strategy: deriveRivalStrategy(owner.character),
+      financialHealth: randInt(45, 75),
       roster,
       flagshipTalent: flagshipFromRoster(roster),
     };
@@ -1547,7 +1714,11 @@ function tickRivalPromotion(rival) {
   const drift = randInt(-3, 4) + rival.momentum;
   const reputation = clamp(rival.reputation + drift, 2, 98);
   const momentum = clamp(rival.momentum + randInt(-1, 1), -2, 2);
-  return { ...rival, reputation, momentum };
+  const focus = (rival.strategy || {}).focus;
+  const volatility = focus === 'aggressive' ? 1.6 : focus === 'stabilize' ? 0.6 : 1;
+  const healthDrift = Math.round((momentum * 2 + randInt(-3, 3)) * volatility);
+  const financialHealth = clamp((rival.financialHealth !== undefined ? rival.financialHealth : 60) + healthDrift, 0, 100);
+  return { ...rival, reputation, momentum, financialHealth };
 }
 function processRivalConsolidation(rivals) {
   let list = [...rivals];
@@ -1573,10 +1744,28 @@ function processRivalConsolidation(rivals) {
     while (list.some((r) => r.name === name)) name = generatePromotionName();
     const region = pick(REGION_LIST).id; const style = pick(STYLE_LIST).id; const reputation = randInt(8, 20);
     const roster = generateRivalRoster(region, style, reputation);
-    list = [...list, { id: uid(), name, region, style, reputation, momentum: randInt(-1, 1), relationship: 'neutral', roster, flagshipTalent: flagshipFromRoster(roster) }];
+    const owner = generateRivalOwner(region);
+    list = [...list, { id: uid(), name, region, style, reputation, momentum: randInt(-1, 1), relationship: 'neutral', owner, strategy: deriveRivalStrategy(owner.character), financialHealth: randInt(45, 75), roster, flagshipTalent: flagshipFromRoster(roster) }];
     news.push(`A new promotion, ${name}, has launched.`);
   }
   return { rivals: list, news };
+}
+// Sustained financial pressure can shrink or end a promotion entirely, not just merge it
+// into a bigger one. Folded promotions dump their roster onto the open market.
+function processRivalFinancialCollapse(rivals) {
+  let list = [...rivals];
+  const news = [];
+  const freedTalent = [];
+  list = list.filter((r) => {
+    const health = r.financialHealth !== undefined ? r.financialHealth : 60;
+    if (health <= 4 && r.relationship !== 'pact' && Math.random() < 0.2) {
+      (r.roster || []).forEach((w) => freedTalent.push({ ...w, discoveredVia: `formerly of ${r.name}`, weeksUnsigned: 0 }));
+      news.push(`${r.name} has folded, unable to keep the lights on. Their roster hits the open market.`);
+      return false;
+    }
+    return true;
+  });
+  return { rivals: list, news, freedTalent };
 }
 function maybeGenerateRivalOffer(company, roster, rivals, existingInbox) {
   if (existingInbox.length >= 3) return null;
@@ -1597,7 +1786,9 @@ function maybeGenerateRivalOffer(company, roster, rivals, existingInbox) {
 }
 function rivalPoachChance(rival) {
   if (rival.relationship === 'pact') return 0;
-  return clamp(0.1 + rival.reputation / 500 + (rival.relationship === 'rival' ? 0.08 : rival.relationship === 'ally' ? -0.05 : 0), 0.02, 0.35);
+  const focus = (rival.strategy || {}).focus;
+  const focusMult = focus === 'aggressive' ? 1.25 : focus === 'stabilize' ? 0.75 : 1;
+  return clamp((0.1 + rival.reputation / 500 + (rival.relationship === 'rival' ? 0.08 : rival.relationship === 'ally' ? -0.05 : 0)) * focusMult, 0.02, 0.4);
 }
 function canActToday(company) {
   return (company.weekDay || 1) <= WEEK_DAYS.length;
@@ -1614,16 +1805,41 @@ function tickOneDay(g) {
   if (availableNow.length > 1 && Math.random() < 0.14) {
     const taken = pick(availableNow);
     unavailable.add(taken.id);
-    news.push(`${taken.name} just got booked by another promotion this week.`);
+    // Attribute the loss to a real regional rival when one exists, weighted toward the
+    // aggressive-focus ones, so the loss has a traceable "why" (Phase 5).
+    const regionalRivals = (g.rivals || []).filter((r) => r.region === company.region);
+    const aggressive = regionalRivals.filter((r) => (r.strategy || {}).focus === 'aggressive');
+    const suitor = aggressive.length && Math.random() < 0.6 ? pick(aggressive) : (regionalRivals.length ? pick(regionalRivals) : null);
+    if (suitor) {
+      const why = (suitor.strategy || {}).focus === 'aggressive' ? "they're expanding fast right now" : 'they wanted the date first';
+      news.push(`${suitor.name} booked ${taken.name} out from under you this week — ${why}.`);
+    } else {
+      news.push(`${taken.name} just got booked by another promotion this week.`);
+    }
   }
   company.unavailableVenueIds = Array.from(unavailable);
 
   if (freeAgents.length && g.rivals.length) {
     const rival = pick(g.rivals);
     if (Math.random() < rivalPoachChance(rival) * 0.3) {
-      const target = pick(freeAgents);
+      const need = rivalRosterNeed(rival);
+      const needMatches = freeAgents.filter((w) => w.tier === need);
+      const target = needMatches.length ? pick(needMatches) : pick(freeAgents);
       freeAgents = freeAgents.filter((w) => w.id !== target.id);
-      news.push(`${rival.name} scooped up free agent ${target.name} while you weren't looking.`);
+      news.push(`${rival.name} scooped up free agent ${target.name} while you weren't looking — they needed ${/^[aeiou]/i.test(need) ? 'an' : 'a'} ${need} on the roster.`);
+    }
+  }
+
+  // Daily free-agent trickle: roughly one new face every 2-3 action days, faster when the pool runs thin.
+  const FA_POOL_MIN = 12;
+  const FA_POOL_CAP = 30;
+  if (freeAgents.length < FA_POOL_CAP) {
+    const dailyChance = freeAgents.length < FA_POOL_MIN ? 0.55 : 0.35;
+    if (Math.random() < dailyChance) {
+      const tier = pick(['Jobber', 'Jobber', 'Rookie', 'Rookie', 'Rookie', 'Mid-Card']);
+      const fresh = generateWrestler(tier, company.region, company.style);
+      freeAgents = [...freeAgents, fresh];
+      news.push(`New face on the free agent market: ${fresh.name}, fresh off the local scene.`);
     }
   }
 
@@ -1652,10 +1868,16 @@ const JOURNALIST_LEANS = [
   { id: 'hardcore', title: 'Hardcore Beat Writer' },
   { id: 'rumors', title: 'Backstage Insider' },
 ];
+const UNCONFIRMED_RUMORS = [
+  "Hearing whispers of a backstage falling-out somewhere in the territory — nobody's confirming names yet.",
+  "A source close to the business says a big signing is coming. Take that for what it's worth.",
+  "Word going around that a promotion out there is quietly shopping for a buyer. Grain of salt on this one.",
+  "Someone in the locker room scene is unhappy enough to be making calls, according to people who'd know. Or claim to.",
+];
 function generateJournalists(regionId) {
-  return JOURNALIST_LEANS.map((lean) => ({ name: generateAdvisorName(regionId), leanId: lean.id, title: lean.title }));
+  return JOURNALIST_LEANS.map((lean) => ({ name: generateAdvisorName(regionId), leanId: lean.id, title: lean.title, credibility: randInt(35, 90) }));
 }
-function journalistTake(leanId, recap, rivals, worldEvents) {
+function journalistTake(leanId, recap, rivals, worldEvents, credibility) {
   const sortedRivals = (rivals || []).slice().sort((a, b) => b.reputation - a.reputation);
   const topRival = sortedRivals[0] || null;
   const hotRival = (rivals || []).find((r) => r.momentum >= 2);
@@ -1686,6 +1908,10 @@ function journalistTake(leanId, recap, rivals, worldEvents) {
     if (recap.shows <= 1) candidates.push(`One show all month? Fans need chaos more often than that.`);
     if (!candidates.length) candidates.push(`Nothing broke, nothing bled. Forgettable month if you ask me.`);
   } else if (leanId === 'rumors') {
+    // Lower-credibility insiders sometimes run with unconfirmed chatter instead of a
+    // grounded story — beats/credibility per Phase 5, full confirm/correct lifecycle is Phase 9.
+    const cred = credibility !== undefined ? credibility : 65;
+    if (Math.random() < clamp((75 - cred) / 220, 0.04, 0.32)) return pick(UNCONFIRMED_RUMORS);
     if (recap.titleChanges.length) candidates.push(`Word is ${recap.titleChanges[0].winner} winning the ${recap.titleChanges[0].titleName} wasn't universally popular backstage. Keep an eye on that locker room.`);
     if (poaches.length) candidates.push(`${pick(poaches).text} Wonder what that signing bonus looked like.`);
     if (consolidations.length) candidates.push(`Big news out of the business this month: ${pick(consolidations).text}`);
@@ -1748,7 +1974,7 @@ function generateMonthlyRecap(slice, roster, monthNum, year, journalists, rivals
   recap.grade = shows ? showLetterGrade({ attendance: totalAttendance, capacity: sum(slice.map((h) => h.capacity)), avgStars, netProfit: totalProfit }) : null;
   const windowStart = monthNum * 4 - 3;
   const worldEventsSlice = (worldEvents || []).filter((e) => e.year === year && e.week >= windowStart && e.week <= monthNum * 4);
-  recap.press = (journalists || []).map((j) => ({ name: j.name, title: j.title, take: journalistTake(j.leanId, recap, rivals, worldEventsSlice) }));
+  recap.press = (journalists || []).map((j) => ({ name: j.name, title: j.title, take: journalistTake(j.leanId, recap, rivals, worldEventsSlice, j.credibility) }));
   return recap;
 }
 
@@ -2069,7 +2295,7 @@ function normalizeGame(loaded) {
     const titleId = item.titleId !== undefined ? item.titleId : null;
     return { ...item, winnerIds, titleId };
   });
-  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280), contractPromise: w.contractPromise !== undefined ? w.contractPromise : null, character: w.character || generateCharacterCore() });
+  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, wellnessProgramCount: w.wellnessProgramCount || 0, tierTrendWeeks: w.tierTrendWeeks || 0, timesRenewed: w.timesRenewed || 0, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280), contractPromise: w.contractPromise !== undefined ? w.contractPromise : null, character: w.character || generateCharacterCore() });
   const fixStaff = (s) => ({ ...s, trait: s.trait !== undefined ? s.trait : null, ambition: { unhappyStreak: 0, contentStreak: 0, ...(s.ambition || assignStaffAmbition()) }, weeksEmployed: s.weeksEmployed || 0 });
   const loadedCompany = loaded.company || {};
   const oldUpgrades = loadedCompany.upgrades || {};
@@ -2097,7 +2323,7 @@ function normalizeGame(loaded) {
       tvDeal: loadedCompany.tvDeal || null,
       matchResearch: loadedCompany.matchResearch || { unlockedTypes: [], inProgress: null },
       advisors: loadedCompany.advisors || generateAdvisors(loadedCompany.region || 'usa'),
-      journalists: loadedCompany.journalists || generateJournalists(loadedCompany.region || 'usa'),
+      journalists: (loadedCompany.journalists || generateJournalists(loadedCompany.region || 'usa')).map((j) => ({ ...j, credibility: j.credibility !== undefined ? j.credibility : randInt(35, 90) })),
       mediaInterviewMilestones: loadedCompany.mediaInterviewMilestones || [],
       weekDay: loadedCompany.weekDay || 1,
       unavailableVenueIds: loadedCompany.unavailableVenueIds || [],
@@ -2115,7 +2341,8 @@ function normalizeGame(loaded) {
     inbox: loaded.inbox || [],
     rivals: (loaded.rivals || generateRivalPromotions()).map((r) => {
       const roster = r.roster || generateRivalRoster(r.region, r.style, r.reputation);
-      return { ...r, roster, flagshipTalent: r.flagshipTalent || flagshipFromRoster(roster) };
+      const owner = r.owner || generateRivalOwner(r.region);
+      return { ...r, roster, flagshipTalent: r.flagshipTalent || flagshipFromRoster(roster), owner, strategy: r.strategy || deriveRivalStrategy(owner.character), financialHealth: r.financialHealth !== undefined ? r.financialHealth : randInt(45, 75) };
     }),
     mediaRecaps: loaded.mediaRecaps || [],
     devLog: loaded.devLog || [],
@@ -2219,13 +2446,13 @@ function PrimaryButton({ children, onClick, disabled, full, danger, icon: Icon }
   );
 }
 
-function GhostButton({ children, onClick, disabled, icon: Icon, danger }) {
+function GhostButton({ children, onClick, disabled, icon: Icon, danger, light }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
       className={`flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold border ${disabled ? 'opacity-40' : ''}`}
-      style={{ borderColor: danger ? C.rope : C.line, color: danger ? C.rope : C.ink }}
+      style={{ borderColor: danger ? C.rope : light ? 'rgba(246,240,225,0.35)' : C.line, color: danger ? C.rope : light ? C.cream : C.ink }}
     >
       {Icon && <Icon size={13} />}
       {children}
@@ -2407,13 +2634,59 @@ export default function WrestlingGM() {
       if (hasTrait(w, 'difficult')) bonus = Math.round(bonus * 1.3);
       if (hasTrait(w, 'company_man')) bonus = Math.round(bonus * 0.8);
       if (g.company.funds < bonus) { showToast('Not enough funds to renew.'); return g; }
+      const timesRenewed = (w.timesRenewed || 0) + 1;
+      // Established trust costs a little less to retain — loyalty mattering mechanically, not just flavor.
+      const raisePct = timesRenewed >= 3 ? randInt(3, 14) : randInt(5, 20);
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus, bossReputation: bumpBossRep(g, 1) },
-        roster: g.roster.map((r) => (r.id === id ? { ...r, contractWeeksLeft: randInt(12, 30), salary: Math.round(r.salary * (1 + randInt(5, 20) / 100)) } : r)),
+        roster: g.roster.map((r) => (r.id === id ? {
+          ...r,
+          contractWeeksLeft: randInt(12, 30),
+          salary: Math.round(r.salary * (1 + raisePct / 100)),
+          timesRenewed,
+          storyline: [...(r.storyline || []), { week: g.company.week, year: g.company.year, text: 'Signed on for another run.', importance: timesRenewed >= 3 ? 6 : 4, valence: 1, type: 'loyalty' }].slice(-30),
+        } : r)),
       });
     });
     showToast('Contract renewed.');
+  }
+  // A real opportunity-cost decision: only surfaces as meaningful when finances are actually
+  // tight. Saves real money now, but costs morale — more for security-driven people, less for
+  // someone who's already built up trust through repeated renewals (Phase 8).
+  function requestPayCut(id) {
+    let outcome = 'none';
+    let wrestlerName = '';
+    updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
+      const w = g.roster.find((r) => r.id === id);
+      if (!w) return g;
+      wrestlerName = w.name;
+      const needs = (w.character || {}).needs || [];
+      let moraleHit = 12 + (needs.includes('security') ? 8 : 0) - ((w.timesRenewed || 0) >= 2 ? 4 : 0);
+      moraleHit = clamp(moraleHit, 4, 25);
+      if (w.morale - moraleHit < 15 && Math.random() < 0.5) {
+        outcome = 'refused';
+        return tickOneDay({
+          ...g,
+          news: [`${w.name} refuses to take a pay cut — pushed too far already.`, ...g.news].slice(0, 30),
+          roster: g.roster.map((r) => (r.id === id ? { ...r, morale: clamp(r.morale - 5, 0, 100), ambition: r.ambition ? { ...r.ambition, unhappyStreak: (r.ambition.unhappyStreak || 0) + 5 } : r.ambition } : r)),
+        });
+      }
+      outcome = 'accepted';
+      return tickOneDay({
+        ...g,
+        news: [`${w.name} agreed to a pay cut to help the company through a rough stretch.`, ...g.news].slice(0, 30),
+        roster: g.roster.map((r) => (r.id === id ? {
+          ...r,
+          salary: Math.max(20, Math.round(r.salary * 0.8)),
+          morale: clamp(r.morale - moraleHit, 0, 100),
+          storyline: [...(r.storyline || []), { week: g.company.week, year: g.company.year, text: 'Took a pay cut to help the company through hard times.', importance: 7, valence: -1, type: 'financial' }].slice(-30),
+        } : r)),
+      });
+    });
+    if (outcome === 'accepted') showToast(`${wrestlerName} took a pay cut.`);
+    else if (outcome === 'refused') showToast(`${wrestlerName} refused the pay cut.`);
   }
   function grantAmbitionRequest(id) {
     updateGame((g) => {
@@ -2431,23 +2704,42 @@ export default function WrestlingGM() {
     showToast('Request addressed.');
   }
   function sendToWellnessProgram(id) {
+    let outcome = 'none';
+    let wrestlerName = '';
     updateGame((g) => {
       if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
       const w = g.roster.find((r) => r.id === id);
       if (!w) return g;
+      wrestlerName = w.name;
       const cost = 3000;
       if (g.company.funds < cost) { showToast('Not enough funds to cover this.'); return g; }
+      if (Math.random() < wellnessRefusalChance(w)) {
+        outcome = 'refused';
+        return tickOneDay({
+          ...g,
+          news: [`${w.name} turned down the offer of support. Sometimes it takes more than one ask.`, ...g.news].slice(0, 30),
+          roster: g.roster.map((r) => (r.id === id ? {
+            ...r,
+            morale: clamp(r.morale - 3, 0, 100),
+            storyline: [...(r.storyline || []), { week: g.company.week, year: g.company.year, text: 'Turned down an offer of support.', importance: 6, valence: -1, type: 'wellness' }].slice(-30),
+          } : r)),
+        });
+      }
+      outcome = 'accepted';
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - cost, bossReputation: bumpBossRep(g, 3) },
         roster: g.roster.map((r) => (r.id === id ? {
           ...r,
           wellness: { status: 'in_program', weeksInStatus: 0 },
+          wellnessProgramCount: (r.wellnessProgramCount || 0) + 1,
           morale: clamp(r.morale + 15, 0, 100),
+          storyline: [...(r.storyline || []), { week: g.company.week, year: g.company.year, text: 'Accepted help and stepped away to focus on themselves.', importance: 7, valence: 1, type: 'wellness' }].slice(-30),
         } : r)),
       });
     });
-    showToast(`${game.roster.find((r) => r.id === id)?.name || 'Wrestler'} sent to get support.`);
+    if (outcome === 'accepted') showToast(`${wrestlerName} sent to get support.`);
+    else if (outcome === 'refused') showToast(`${wrestlerName} isn't ready to accept help right now.`);
   }
   function giveStaffRaise(role, id) {
     const key = staffRoleKey(role);
@@ -2493,7 +2785,7 @@ export default function WrestlingGM() {
       const weeklyWage = Math.round(w.salary * wagePct);
       if (g.company.funds < bonus) { showToast('Not enough funds for the signing bonus.'); return g; }
       const offerQuality = (bonusPct + wagePct) / 2;
-      const fit = negotiationFit(w.character, term.id, offerQuality, g.company.reputation, contractWeeks);
+      const fit = negotiationFit(w.character, term.id, offerQuality, g.company.reputation, contractWeeks, w.storyline);
       if (Math.random() < negotiationRejectionChance(fit)) {
         outcome = 'rejected';
         return tickOneDay({ ...g, news: [negotiationRejectionReason(w, term.id), ...g.news].slice(0, 30) });
@@ -2513,7 +2805,7 @@ export default function WrestlingGM() {
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
-        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline }].slice(-20) }],
+        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline, importance: 6, valence: 1, type: 'signing' }].slice(-30) }],
         freeAgents: g.freeAgents.filter((f) => f.id !== id),
         relationships,
       });
@@ -2755,7 +3047,7 @@ export default function WrestlingGM() {
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus, bossReputation: bumpBossRep(g, -1) },
-        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, discoveredVia: `poached from ${rival.name}`, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Poached away from ${rival.name}.` }].slice(-20) }],
+        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, discoveredVia: `poached from ${rival.name}`, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Poached away from ${rival.name}.`, importance: 6, valence: 1, type: 'signing' }].slice(-30) }],
         rivals: g.rivals.map((r) => (r.id === rivalId ? {
           ...r,
           roster: (r.roster || []).filter((x) => x.id !== wrestlerId),
@@ -2863,6 +3155,15 @@ export default function WrestlingGM() {
         },
       };
     });
+  }
+  function setMerchAllocation(itemId, wrestlerId, weight) {
+    updateGame((g) => ({
+      ...g,
+      company: {
+        ...g.company,
+        merchMenu: g.company.merchMenu.map((e) => (e.itemId === itemId ? { ...e, allocations: { ...(e.allocations || {}), [wrestlerId]: clamp(weight, 0, 100) } } : e)),
+      },
+    }));
   }
   function removeMerchItem(itemId) {
     updateGame((g) => ({ ...g, company: { ...g.company, merchMenu: g.company.merchMenu.filter((e) => e.itemId !== itemId) } }));
@@ -3050,7 +3351,7 @@ export default function WrestlingGM() {
     const result = simulateShow(game.draftShow, game);
     const wrestlerUpdates = {};
     const storylineAdds = {};
-    const addStoryline = (id, text) => { if (!id) return; if (!storylineAdds[id]) storylineAdds[id] = []; storylineAdds[id].push(text); };
+    const addStoryline = (id, text, importance = 5, valence = 0, type = 'general') => { if (!id) return; if (!storylineAdds[id]) storylineAdds[id] = []; storylineAdds[id].push({ text, importance, valence, type }); };
     const devLogAdds = [];
     const addDevLog = (category, message) => devLogAdds.push({ week: game.company.week, year: game.company.year, category, message });
     addDevLog('finance', `fillRate=${(result.fillRate * 100).toFixed(1)}% attendance=${result.attendance}/${result.venue.capacity} venue=${result.venue.name}${result.venue.crowdLean ? ` (${result.venue.crowdLean} crowd, company style=${game.company.style})` : ''}`);
@@ -3077,7 +3378,7 @@ export default function WrestlingGM() {
         const healMult = currentTier(game.company, 'medical').healMult * (hasTrait(injuredWrestler, 'iron_constitution') ? 0.6 : 1);
         const weeksLeft = Math.max(1, Math.round(inj.weeksLeft * healMult));
         wrestlerUpdates[inj.wrestlerId].injury = { label: inj.label, weeksLeft };
-        addStoryline(inj.wrestlerId, `Suffered a ${inj.label.toLowerCase()} — out ${weeksLeft} week${weeksLeft > 1 ? 's' : ''}.`);
+        addStoryline(inj.wrestlerId, `Suffered a ${inj.label.toLowerCase()} — out ${weeksLeft} week${weeksLeft > 1 ? 's' : ''}.`, 8, -1, 'injury');
       });
     });
     result.promoResults.forEach((p) => {
@@ -3101,6 +3402,10 @@ export default function WrestlingGM() {
     const leaderCount = game.roster.filter((w) => hasTrait(w, 'locker_leader')).length;
     const politicianCount = game.roster.filter((w) => hasTrait(w, 'backstage_politician')).length;
     const passiveMorale = clamp(leaderCount * 1 - politicianCount * 1, -4, 4);
+    // A former wrestler now on staff (retired into a Road Agent/Writer/Announcer role) mentors
+    // the young roster instead of just being a quality stat — legacy through people, not just numbers.
+    const mentorsOnStaff = [...(game.staff.roadAgents || []), ...(game.staff.writers || []), ...(game.staff.announcers || [])].filter((s) => s.formerWrestler);
+    const hasMentor = mentorsOnStaff.length > 0;
 
     const updatedRoster = game.roster.map((w) => {
       const upd = wrestlerUpdates[w.id];
@@ -3118,11 +3423,18 @@ export default function WrestlingGM() {
       const newInjury = !!(upd && upd.injury);
       const matchedThisWeek = !!(upd && upd.matchInc);
       const justRecovered = wasInjured && !injury && !newInjury;
-      const confidence = clamp((w.confidence || 50) + (upd ? upd.confGain || 0 : 0) - (justRecovered ? 15 : 0), 5, 100);
+      const mentorBoost = hasMentor && (w.tier === 'Jobber' || w.tier === 'Rookie') && Math.random() < 0.3 ? 1 : 0;
+      const confidence = clamp((w.confidence || 50) + (upd ? upd.confGain || 0 : 0) - (justRecovered ? 15 : 0) + mentorBoost, 5, 100);
+      // A recent, significant personal memory lingers a little rather than resetting to
+      // neutral every week — small and bounded, not a permanent stat lock (Phase 6).
+      const topMemory = wrestlerDefiningMemory(w.storyline);
+      const memoryDrift = topMemory && (topMemory.importance || 0) >= 7 && weeksBetween(topMemory.week, topMemory.year, game.company.week, game.company.year) <= 6
+        ? (topMemory.valence > 0 ? 1 : topMemory.valence < 0 ? -1 : 0)
+        : 0;
       return {
         ...w,
         popularity: clamp(w.popularity + (upd ? upd.popDelta : 0), 0, 100),
-        morale: clamp(w.morale + (upd ? upd.moraleDelta : 0) + passiveMorale - (contractWeeksLeft === 0 ? 5 : 0), 0, 100),
+        morale: clamp(w.morale + (upd ? upd.moraleDelta : 0) + passiveMorale + memoryDrift - (contractWeeksLeft === 0 ? 5 : 0), 0, 100),
         condition, injury, contractWeeksLeft, confidence,
         matchesWrestled: w.matchesWrestled + (upd ? upd.matchInc || 0 : 0),
         merchEarnings: w.merchEarnings + (upd ? upd.merchEarned || 0 : 0),
@@ -3140,10 +3452,23 @@ export default function WrestlingGM() {
     const yearRolled = nextYear > game.company.year;
 
     const retirementNews = [];
+    const retirementWorldEvents = [];
+    let transitionedStaff = [];
     if (yearRolled) {
       const aged = stillRoster.map((w) => ({ ...w, age: w.age + 1 }));
       const retiring = aged.filter((w) => Math.random() < retirementChance(w.age));
-      retiring.forEach((w) => retirementNews.push(`${w.name} (${w.age}) has announced their retirement from the ring.`));
+      retiring.forEach((w) => {
+        const transitionChance = clamp(0.25 + (w.tier === 'Star' || w.tier === 'Legend' ? 0.25 : 0) + ((w.character && w.character.needs.includes('purpose')) ? 0.1 : 0) + ((w.character && w.character.needs.includes('legacy')) ? 0.15 : 0), 0.15, 0.7);
+        if (Math.random() < transitionChance) {
+          const role = pick(['Road Agent', 'Road Agent', 'Writer', 'Announcer']);
+          transitionedStaff.push(wrestlerToStaffMember(w, role));
+          retirementNews.push(`${w.name} (${w.age}) has retired from the ring — staying on as a ${role}, passing on what they know.`);
+          retirementWorldEvents.push({ type: 'retirement', week: game.company.week, year: game.company.year, targetName: w.name, text: `${w.name} retired from wrestling and stayed on as a ${role}.` });
+        } else {
+          retirementNews.push(`${w.name} (${w.age}) has announced their retirement from the ring.`);
+          retirementWorldEvents.push({ type: 'retirement', week: game.company.week, year: game.company.year, targetName: w.name, text: `${w.name} retired after a career in the ring.` });
+        }
+      });
       const retiredIds = new Set(retiring.map((w) => w.id));
       stillRoster = aged.filter((w) => !retiredIds.has(w.id));
     }
@@ -3171,8 +3496,13 @@ export default function WrestlingGM() {
 
     const rivalNews = [];
     const worldEventAdds = [];
+    retirementWorldEvents.forEach((e) => worldEventAdds.push(e));
     let rivalRepTrickle = 0;
     let nextStaffPool = game.staffPool;
+    transitionedStaff.forEach((s) => {
+      const key = staffRoleKey(s.role);
+      nextStaffPool = { ...nextStaffPool, [key]: [...(nextStaffPool[key] || []), s] };
+    });
     let nextFreeAgentsFromRivals = [];
     let nextRivals = game.rivals.map((rival) => {
       const ticked = tickRivalPromotion(rival);
@@ -3197,11 +3527,32 @@ export default function WrestlingGM() {
         worldEventAdds.push({ type: 'departure', week: game.company.week, year: game.company.year, rivalName: ticked.name, targetName: w.name, text: `${w.name} left ${ticked.name} as their contract ran out.` });
       });
 
+      const financialHealth = ticked.financialHealth !== undefined ? ticked.financialHealth : 60;
+      // Financial pressure shrinks a struggling roster before it ever gets bad enough to fold outright.
+      if (financialHealth <= 20 && roster.length > 2 && Math.random() < 0.22) {
+        const cut = [...roster].sort((a, b) => a.popularity - b.popularity)[0];
+        roster = roster.filter((w) => w.id !== cut.id);
+        nextFreeAgentsFromRivals.push({ ...cut, discoveredVia: `formerly of ${ticked.name}`, weeksUnsigned: 0 });
+        rivalNews.push(`${ticked.name} is bleeding money and had to let ${cut.name} go.`);
+        worldEventAdds.push({ type: 'departure', week: game.company.week, year: game.company.year, rivalName: ticked.name, targetName: cut.name, text: `${ticked.name} cut ${cut.name} to control costs.` });
+      } else if (financialHealth >= 85 && Math.random() < 0.1) {
+        // Flush and confident: they grow their own pipeline instead of raiding the free-agent market.
+        const growTier = pick(['Rookie', 'Rookie', 'Mid-Card']);
+        const fresh = generateWrestler(growTier, ticked.region, ticked.style);
+        roster = [...roster, { ...fresh, contractWeeksLeft: randInt(15, 40), rivalHappiness: randInt(50, 90) }];
+        rivalNews.push(`${ticked.name} is expanding — they just brought in ${fresh.name}.`);
+        worldEventAdds.push({ type: 'flavor_up', week: game.company.week, year: game.company.year, rivalName: ticked.name, text: `${ticked.name} is expanding — they just brought in ${fresh.name}.` });
+      }
+
       if (freeAgents.length && Math.random() < rivalPoachChance(ticked)) {
-        const target = pick(freeAgents);
+        const need = rivalRosterNeed(ticked);
+        const needMatches = freeAgents.filter((w) => w.tier === need);
+        const target = needMatches.length ? pick(needMatches) : pick(freeAgents);
+        const reason = needMatches.length ? `they needed ${/^[aeiou]/i.test(need) ? 'an' : 'a'} ${need} on the roster` : 'a roster of opportunity';
         freeAgents = freeAgents.filter((w) => w.id !== target.id);
-        rivalNews.push(`${ticked.name} signed free agent ${target.name}.`);
-        worldEventAdds.push({ type: 'poach', week: game.company.week, year: game.company.year, rivalName: ticked.name, targetName: target.name, text: `${ticked.name} signed free agent ${target.name}.` });
+        rivalNews.push(`${ticked.name} signed free agent ${target.name} — ${reason}.`);
+        worldEventAdds.push({ type: 'poach', week: game.company.week, year: game.company.year, rivalName: ticked.name, targetName: target.name, text: `${ticked.name} signed free agent ${target.name} — ${reason}.` });
+        addDevLog('reputation', `${ticked.name} poach: needed ${need}, signed ${target.name} (${target.tier}). Strategy focus: ${(ticked.strategy || {}).focus || 'n/a'}.`);
       } else if (Math.random() < 0.2) {
         const isUp = ticked.momentum >= 0;
         const flavor = isUp ? pick(RIVAL_FLAVOR_UP) : pick(RIVAL_FLAVOR_DOWN);
@@ -3231,6 +3582,15 @@ export default function WrestlingGM() {
       worldEventAdds.push({ type: n.startsWith('A new promotion') ? 'launch' : 'consolidation', week: game.company.week, year: game.company.year, text: n });
     });
 
+    const collapse = processRivalFinancialCollapse(nextRivals);
+    nextRivals = collapse.rivals;
+    if (collapse.freedTalent.length) freeAgents = [...freeAgents, ...collapse.freedTalent];
+    collapse.news.forEach((n) => {
+      rivalNews.push(n);
+      worldEventAdds.push({ type: 'fold', week: game.company.week, year: game.company.year, text: n });
+      addDevLog('finance', `Rival fold: ${n}`);
+    });
+
     let nextInbox = (game.inbox || []).filter((o) => !(game.company.year > o.expiresYear || (game.company.year === o.expiresYear && game.company.week > o.expiresWeek)));
     const newOffer = maybeGenerateRivalOffer(game.company, stillRoster, nextRivals, nextInbox);
     if (newOffer) {
@@ -3238,22 +3598,34 @@ export default function WrestlingGM() {
       rivalNews.push(`New offer in your inbox: ${newOffer.text}`);
     }
 
-    const FA_POOL_MIN = 12;
-    const FA_POOL_CAP = 30;
-    if (freeAgents.length < FA_POOL_CAP) {
-      const chance = freeAgents.length < FA_POOL_MIN ? 0.85 : 0.5;
-      if (Math.random() < chance) {
-        const tier = pick(['Jobber', 'Jobber', 'Rookie', 'Rookie', 'Rookie', 'Mid-Card']);
-        const fresh = generateWrestler(tier, game.company.region, game.company.style);
-        freeAgents = [...freeAgents, fresh];
-        rivalNews.push(`New face on the free agent market: ${fresh.name}, fresh off the local scene.`);
-        if (freeAgents.length < FA_POOL_CAP && Math.random() < 0.25) {
-          const tier2 = pick(['Jobber', 'Rookie', 'Rookie', 'Mid-Card']);
-          const fresh2 = generateWrestler(tier2, game.company.region, game.company.style);
-          freeAgents = [...freeAgents, fresh2];
-          rivalNews.push(`Another name hit the market this week: ${fresh2.name}.`);
-        }
+    // Free-agent arrivals now trickle in daily via tickOneDay (see FA_POOL_MIN/CAP there)
+    // instead of only once per week here, so the market feels alive between shows too.
+
+    // Unemployed workers keep living off-screen (Phase 5): a slow stat drift while
+    // unsigned, and a chance long-unsigned lower-tier names give up and leave the pool
+    // for good rather than sitting forever as static entries.
+    freeAgents = freeAgents.map((w) => {
+      const weeksUnsigned = (w.weeksUnsigned || 0) + 1;
+      let stats = w.stats;
+      if (Math.random() < 0.15) {
+        const key = pick(['strength', 'technical', 'aerial', 'charisma', 'stamina']);
+        const direction = w.age >= 33 ? -1 : Math.random() < 0.5 ? -1 : 1;
+        stats = { ...stats, [key]: clamp(stats[key] + direction * randInt(1, 3), 5, 99) };
       }
+      return { ...w, weeksUnsigned, stats };
+    });
+    const LEAVE_THRESHOLD = { Jobber: 10, Rookie: 18 };
+    const leaving = freeAgents.filter((w) => {
+      const threshold = LEAVE_THRESHOLD[w.tier];
+      return threshold && w.weeksUnsigned >= threshold && Math.random() < 0.12;
+    });
+    if (leaving.length) {
+      const leavingIds = new Set(leaving.map((w) => w.id));
+      freeAgents = freeAgents.filter((w) => !leavingIds.has(w.id));
+      leaving.forEach((w) => {
+        rivalNews.push(`${w.name} gave up trying to catch on and walked away from wrestling.`);
+        worldEventAdds.push({ type: 'fa_departure', week: game.company.week, year: game.company.year, targetName: w.name, text: `${w.name} left the wrestling business after going unsigned too long.` });
+      });
     }
 
     const STAFF_POOL_CAP = 6;
@@ -3308,8 +3680,8 @@ export default function WrestlingGM() {
           if (isBlowOff) {
             feudRepBonus += clamp(Math.round(updated.heat / 40), 1, 4);
             feudNews.push(`${feud.aName} and ${feud.bName} finally settle their feud in the blow-off match!`);
-            addStoryline(feud.aId, `Settled the score with ${feud.bName} in a blow-off match.`);
-            addStoryline(feud.bId, `Settled the score with ${feud.aName} in a blow-off match.`);
+            addStoryline(feud.aId, `Settled the score with ${feud.bName} in a blow-off match.`, 7, 1, 'feud');
+            addStoryline(feud.bId, `Settled the score with ${feud.aName} in a blow-off match.`, 7, 1, 'feud');
           }
           updated = advanceFeudFromMatch(updated, m.result.finalStars, m.finishId, isBlowOff, game.company.week, game.company.year, roadAgentHeatMultForFeuds);
           touched = true;
@@ -3319,7 +3691,7 @@ export default function WrestlingGM() {
         if (feudPairPresent(feud, p.participantIds)) {
           const storyBeat = p.storyBeatId && (p.feudId === feud.id || !p.feudId) ? STORY_BEATS.find((b) => b.id === p.storyBeatId) : null;
           updated = advanceFeudFromPromo(updated, p.purpose, game.company.week, game.company.year, storyBeat);
-          if (storyBeat) addStoryline(feud.aId, `Story beat: ${storyBeat.label} with ${feud.bName}.`);
+          if (storyBeat) addStoryline(feud.aId, `Story beat: ${storyBeat.label} with ${feud.bName}.`, 4, 0, 'feud');
           touched = true;
         }
       });
@@ -3338,8 +3710,8 @@ export default function WrestlingGM() {
       if (changed) {
         changedTitleIds.add(title.id);
         titleNews.push(title.holderIds.length ? `${winnerNames.join(' & ')} defeated the champion to win the ${title.name}!` : `${winnerNames.join(' & ')} won the vacant ${title.name}!`);
-        winnerIds.forEach((id) => addStoryline(id, `Won the ${title.name}!`));
-        title.holderIds.forEach((id) => addStoryline(id, `Lost the ${title.name}.`));
+        winnerIds.forEach((id) => addStoryline(id, `Won the ${title.name}!`, 10, 1, 'title'));
+        title.holderIds.forEach((id) => addStoryline(id, `Lost the ${title.name}.`, 8, -1, 'title'));
       } else if (titleMatch.finishId === 'dq' || titleMatch.finishId === 'countout') {
         titleNews.push(`The ${title.name} does not change hands on a ${FINISH_TYPES.find((f) => f.id === titleMatch.finishId).label.toLowerCase()}.`);
       }
@@ -3354,7 +3726,7 @@ export default function WrestlingGM() {
       const amb = w.ambition || assignWrestlerAmbition();
       const fulfilled = checkWrestlerAmbitionFulfilled(w, amb, ambitionCtx);
       const { ambition: nextAmb, news } = tickAmbition(w, amb, fulfilled, WRESTLER_AMBITIONS, stillRoster);
-      if (news) { ambitionNews.push(news); addStoryline(w.id, news); }
+      if (news) { ambitionNews.push(news); addStoryline(w.id, news, 6, /granted|fulfilled|satisfied/i.test(news) ? 1 : -1, 'ambition'); }
       if (nextAmb.satisfaction <= 0) {
         departingIds.add(w.id);
         bossRepFromDepartures -= 1;
@@ -3371,7 +3743,7 @@ export default function WrestlingGM() {
     const traitEvolutionNews = [];
     rosterAfterAmbitions = rosterAfterAmbitions.map((w) => {
       const { traits, news: tNews } = evolveWrestlerTraits(w, ambitionCtx);
-      tNews.forEach((n) => { traitEvolutionNews.push(n); addStoryline(w.id, n); });
+      tNews.forEach((n) => { traitEvolutionNews.push(n); addStoryline(w.id, n, 6, 0, 'trait'); });
       return { ...w, traits };
     });
     const wellnessNews = [];
@@ -3380,13 +3752,29 @@ export default function WrestlingGM() {
     let contractPromiseTrustDelta = 0;
     rosterAfterAmbitions = rosterAfterAmbitions.map((w) => {
       const { wellness, news: wNews, repPenalty } = tickWellness(w);
-      if (wNews) { wellnessNews.push(wNews); addStoryline(w.id, wNews); }
+      if (wNews) { wellnessNews.push(wNews); addStoryline(w.id, wNews, 7, -1, 'wellness'); }
       wellnessRepPenalty += repPenalty;
       const { contractPromise, news: promiseNews, moraleDelta, bossRepDelta } = checkContractPromise(w, ambitionCtx, game.company.week, game.company.year);
-      if (promiseNews) { wellnessNews.push(promiseNews); addStoryline(w.id, promiseNews); }
+      if (promiseNews) { wellnessNews.push(promiseNews); addStoryline(w.id, promiseNews, 7, /kept|honored/i.test(promiseNews) ? 1 : -1, 'promise'); }
       contractPromiseBossRep += bossRepDelta;
       contractPromiseTrustDelta += bossRepDelta > 0 ? 1 : bossRepDelta < 0 ? -2 : 0;
       return { ...w, wellness, contractPromise, morale: clamp(w.morale + moraleDelta, 0, 100) };
+    });
+
+    const tierNews = [];
+    rosterAfterAmbitions = rosterAfterAmbitions.map((w) => {
+      const { tier, tierTrendWeeks, event } = tickTierProgression(w);
+      if (event === 'promoted') {
+        tierNews.push(`${w.name} has been promoted to ${tier} — the crowd's response says it all.`);
+        addStoryline(w.id, `Promoted to ${tier}.`, 8, 1, 'tier');
+        return { ...w, tier, tierTrendWeeks, salary: Math.round(w.salary * 1.15), confidence: clamp(w.confidence + 8, 5, 100), ambition: w.ambition ? { ...w.ambition, satisfaction: clamp(w.ambition.satisfaction + 10, 0, 100) } : w.ambition };
+      }
+      if (event === 'demoted') {
+        tierNews.push(`${w.name} has slipped down to ${tier}. Cold streaks happen to everyone.`);
+        addStoryline(w.id, `Slipped down to ${tier}.`, 7, -1, 'tier');
+        return { ...w, tier, tierTrendWeeks, confidence: clamp(w.confidence - 8, 5, 100), ambition: w.ambition ? { ...w.ambition, satisfaction: clamp(w.ambition.satisfaction - 10, 0, 100) } : w.ambition };
+      }
+      return { ...w, tierTrendWeeks };
     });
 
     const relationshipNews = [];
@@ -3417,7 +3805,7 @@ export default function WrestlingGM() {
           const goneName = aGone ? rel.aName : rel.bName;
           relationshipMoraleDeltas[survivorId] = (relationshipMoraleDeltas[survivorId] || 0) - (rel.type === 'spouses' ? 20 : rel.type === 'family' ? 14 : 8);
           relationshipNews.push(`${goneName}'s departure has hit ${aGone ? rel.bName : rel.aName} hard.`);
-          addStoryline(survivorId, `${goneName}'s departure hit them hard.`);
+          addStoryline(survivorId, `${goneName}'s departure hit them hard.`, 6, -1, 'relationship');
         }
       });
       nextRelationships = nextRelationships.filter((rel) => !departingIds.has(rel.aId) && !departingIds.has(rel.bId));
@@ -3434,8 +3822,8 @@ export default function WrestlingGM() {
       if (!a || !b) return;
       nextRelationships = [...nextRelationships, createRelationshipObject(a.id, a.name, b.id, b.name, 'friends', game.company.week, game.company.year)];
       relationshipNews.push(`${a.name} and ${b.name} have become friends backstage.`);
-      addStoryline(a.id, `Became friends with ${b.name} backstage.`);
-      addStoryline(b.id, `Became friends with ${a.name} backstage.`);
+      addStoryline(a.id, `Became friends with ${b.name} backstage.`, 5, 1, 'relationship');
+      addStoryline(b.id, `Became friends with ${a.name} backstage.`, 5, 1, 'relationship');
     });
     if (Object.keys(relationshipMoraleDeltas).length) {
       rosterAfterAmbitions = rosterAfterAmbitions.map((w) => (
@@ -3447,8 +3835,8 @@ export default function WrestlingGM() {
       stillRoster = stillRoster.map((w) => {
         const adds = storylineAdds[w.id];
         if (!adds || !adds.length) return w;
-        const entries = adds.map((text) => ({ week: game.company.week, year: game.company.year, text }));
-        return { ...w, storyline: [...(w.storyline || []), ...entries].slice(-20) };
+        const entries = adds.map((a) => ({ week: game.company.week, year: game.company.year, ...a }));
+        return { ...w, storyline: [...(w.storyline || []), ...entries].slice(-30) };
       });
     }
 
@@ -3492,6 +3880,7 @@ export default function WrestlingGM() {
     staffAmbitionNews.forEach((n) => newsEntries.push(n));
     traitEvolutionNews.forEach((n) => newsEntries.push(n));
     wellnessNews.forEach((n) => newsEntries.push(n));
+    tierNews.forEach((n) => newsEntries.push(n));
     relationshipNews.forEach((n) => newsEntries.push(n));
     newsEntries.push(result.netProfit >= 0 ? `The show turned a profit of ${money(result.netProfit)}.` : `The show lost ${money(Math.abs(result.netProfit))}.`);
 
@@ -3878,6 +4267,11 @@ export default function WrestlingGM() {
   const draftVenue = ALL_VENUES.find((v) => v.id === draftShow.venueId) || ALL_VENUES[0];
   const unlocked = unlockedVenuesFor(company, rivals);
   const nextVenue = nextLockedVenue(company.reputation);
+  // Financial stress (Phase 8): when funds can't cover roughly two weeks of payroll, the
+  // "ask for a pay cut" option becomes available — a real business-vs-relationship tradeoff
+  // that only exists because money is genuinely tight, not a tool available anytime.
+  const weeklyPayrollAll = sum(roster.map((w) => w.salary)) + sum([...staff.announcers, ...staff.commentators, ...(staff.referees || []), ...(staff.writers || []), ...(staff.roadAgents || [])].map((s) => s.salary));
+  const financialStress = company.funds < weeklyPayrollAll * 2;
 
   const TABS = [
     { id: 'dashboard', label: 'Home', icon: Home },
@@ -3966,7 +4360,7 @@ export default function WrestlingGM() {
             onPurchaseUpgrade={purchaseUpgrade}
             onPurchaseRingShape={purchaseRingShape} onEquipRingShape={equipRingShape}
             onAddConcession={addConcessionItem} onSetConcessionPrice={setConcessionPrice} onRemoveConcession={removeConcessionItem}
-            onAddMerch={addMerchItem} onSetMerchPrice={setMerchPrice} onSetMerchWrestler={toggleMerchWrestler} onRemoveMerch={removeMerchItem}
+            onAddMerch={addMerchItem} onSetMerchPrice={setMerchPrice} onSetMerchWrestler={toggleMerchWrestler} onSetMerchAllocation={setMerchAllocation} onRemoveMerch={removeMerchItem}
             onPurchaseWeaponItem={purchaseWeaponItem} onStartResearch={startMatchResearch}
             onSignTv={signTVDeal}
           />
@@ -4011,6 +4405,7 @@ export default function WrestlingGM() {
           wrestler={roster.find((r) => r.id === selectedWrestler.id) || selectedWrestler} titles={titles} tagTeams={tagTeams} stables={stables} relationships={relationships} onClose={() => setSelectedWrestler(null)}
           onAlign={setAlignment} onRelease={(id) => setConfirmAction({ type: 'release', id })}
           onRenew={renewContract} onGrantRequest={grantAmbitionRequest} onSendToWellness={sendToWellnessProgram} funds={company.funds}
+          onRequestPayCut={requestPayCut} financialStress={financialStress}
         />
       )}
 
@@ -4712,7 +5107,7 @@ function EmptyState({ text }) {
   return <div className="rounded-lg p-6 text-center text-xs" style={{ backgroundColor: C.canvasAlt, color: C.inkFaint }}>{text}</div>;
 }
 
-function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onClose, onAlign, onRelease, onRenew, onGrantRequest, onSendToWellness, funds }) {
+function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onClose, onAlign, onRelease, onRenew, onGrantRequest, onSendToWellness, onRequestPayCut, financialStress, funds }) {
   const champTitles = championTitlesFor(titles, wrestler.id);
   const team = (tagTeams || []).find((t) => t.memberIds.includes(wrestler.id));
   const stable = (stables || []).find((s) => s.memberIds.includes(wrestler.id));
@@ -4737,8 +5132,17 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
           <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>ABOUT</p>
           <p className="text-[12px] mb-2" style={{ color: C.ink }}>{characterReadout(wrestler.character)}</p>
           <p className="text-[11px] italic" style={{ color: C.inkFaint }}>{backgroundSummary(wrestler.character)}</p>
+          <p className="text-[11px] mt-2 pt-2 font-semibold" style={{ color: C.gold, borderTop: `1px solid ${C.line}` }}>Current Chapter: {wrestlerLifeChapter(wrestler)}</p>
           {wrestler.character.lifetimeDream && (
             <p className="text-[11px] mt-2 pt-2" style={{ color: C.goldSoft, borderTop: `1px solid ${C.line}` }}>Lifetime Dream: {wrestler.character.lifetimeDream}</p>
+          )}
+          {wrestlerDefiningMemory(wrestler.storyline) && (
+            <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+              <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>WHAT THEY REMEMBER MOST</p>
+              {wrestlerTopMemories(wrestler.storyline, 3).map((m, i) => (
+                <p key={i} className="text-[11px] mb-0.5" style={{ color: C.inkFaint }}>"{m.text}"</p>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -4887,6 +5291,14 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
         ))}
       </div>
 
+      {financialStress && onRequestPayCut && (
+        <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.08)', border: `1px solid ${C.rope}` }}>
+          <p className="wgm-mono text-[9px] mb-1" style={{ color: C.rope }}>MONEY'S TIGHT</p>
+          <p className="text-[11px] mb-2" style={{ color: C.inkFaint }}>You could ask {wrestler.name.split(' ')[0]} to take a pay cut. Saves real money now — costs morale, more if they need security, less if they've stuck around a while.</p>
+          <GhostButton onClick={() => onRequestPayCut(wrestler.id)}>Ask for a Pay Cut</GhostButton>
+        </div>
+      )}
+
       <div className="flex gap-2">
         {wrestler.contractWeeksLeft <= 6 && <GhostButton icon={Check} onClick={() => onRenew(wrestler.id)} disabled={funds < wrestler.salary}>Renew ({money(wrestler.salary)})</GhostButton>}
         <GhostButton icon={UserMinus} danger onClick={() => onRelease(wrestler.id)}>Release</GhostButton>
@@ -4925,6 +5337,22 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, repu
           </div>
         </div>
       </div>
+
+      {wrestler.character && (
+        <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.canvasAlt }}>
+          <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>ABOUT</p>
+          <p className="text-[12px] mb-2" style={{ color: C.ink }}>{characterReadout(wrestler.character)}</p>
+          <p className="text-[11px] italic" style={{ color: C.inkFaint }}>{backgroundSummary(wrestler.character)}</p>
+          <p className="text-[11px] mt-2 pt-2 font-semibold" style={{ color: C.gold, borderTop: `1px solid ${C.line}` }}>Current Chapter: {wrestlerLifeChapter(wrestler)}</p>
+          {wrestler.character.lifetimeDream && (
+            <p className="text-[11px] mt-2 pt-2" style={{ color: C.goldSoft, borderTop: `1px solid ${C.line}` }}>Lifetime Dream: {wrestler.character.lifetimeDream}</p>
+          )}
+        </div>
+      )}
+
+      {wrestler.hometown && (
+        <p className="text-[11px] mb-3" style={{ color: C.inkFaint }}>{wrestler.hometown}{wrestler.weight ? ` · ${wrestler.weight} lbs` : ''}</p>
+      )}
 
       {(wrestler.traits && wrestler.traits.length > 0) && (
         <div className="mb-4">
@@ -4976,9 +5404,12 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, repu
       )}
 
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>NEGOTIATE THE CONTRACT</p>
+      {(wrestler.storyline || []).some((e) => e.type === 'promise' && e.valence < 0 && (e.importance || 0) >= 6) && (
+        <p className="text-[11px] mb-2 italic" style={{ color: C.rope }}>They remember a promise that didn't get kept — expect some skepticism, especially on Promise the Title or Creative Control.</p>
+      )}
       <div className="space-y-2 mb-4">
         {CONTRACT_TERMS.map((t) => {
-          const fit = negotiationFit(wrestler.character, t.id, offerQuality, reputation, contractWeeks);
+          const fit = negotiationFit(wrestler.character, t.id, offerQuality, reputation, contractWeeks, wrestler.storyline);
           return (
             <button key={t.id} onClick={() => setTermId(t.id)} className="w-full rounded-lg p-2.5 text-left" style={{ backgroundColor: termId === t.id ? C.gold : C.canvasAlt, border: `1px solid ${C.line}` }}>
               <p className="text-xs font-bold" style={{ color: termId === t.id ? C.ink : C.ink }}>{t.label}</p>
@@ -5164,12 +5595,12 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
           </div>
         </div>
         <div className="flex gap-2 mb-2">
-          <GhostButton onClick={onRepairRing} disabled={!canAct || ringCondition >= 100 || funds < ringRepairCost}>Repair Ring {ringCondition < 100 ? `(${money(ringRepairCost)})` : ''}</GhostButton>
-          <GhostButton onClick={onRestockSupplies} disabled={!canAct || supplies >= 100 || funds < restockCost}>Restock {supplies < 100 ? `(${money(restockCost)})` : ''}</GhostButton>
+          <GhostButton light onClick={onRepairRing} disabled={!canAct || ringCondition >= 100 || funds < ringRepairCost}>Repair Ring {ringCondition < 100 ? `(${money(ringRepairCost)})` : ''}</GhostButton>
+          <GhostButton light onClick={onRestockSupplies} disabled={!canAct || supplies >= 100 || funds < restockCost}>Restock {supplies < 100 ? `(${money(restockCost)})` : ''}</GhostButton>
         </div>
         <div className="flex gap-2">
-          <GhostButton onClick={onSkipDay} disabled={!canAct}>Skip Day</GhostButton>
-          <GhostButton onClick={onSkipToShowDay} disabled={!canAct}>Skip to Show Day</GhostButton>
+          <GhostButton light onClick={onSkipDay} disabled={!canAct}>Skip Day</GhostButton>
+          <GhostButton light onClick={onSkipToShowDay} disabled={!canAct}>Skip to Show Day</GhostButton>
         </div>
         <button onClick={onEndWeekWithoutShow} className="wgm-mono text-[9px] underline mt-2" style={{ color: 'rgba(246,240,225,0.5)' }}>
           Not ready? End the week with no show (payroll still due).
@@ -6032,7 +6463,7 @@ function ShopTab({
   onPurchaseUpgrade,
   onPurchaseRingShape, onEquipRingShape,
   onAddConcession, onSetConcessionPrice, onRemoveConcession,
-  onAddMerch, onSetMerchPrice, onSetMerchWrestler, onRemoveMerch,
+  onAddMerch, onSetMerchPrice, onSetMerchWrestler, onSetMerchAllocation, onRemoveMerch,
   onPurchaseWeaponItem, onStartResearch,
   onSignTv,
 }) {
@@ -6148,7 +6579,7 @@ function ShopTab({
       {dept === 'merch' && (
         <MenuBuilder
           catalog={MERCH_ITEMS_CATALOG} menu={company.merchMenu} funds={company.funds} roster={roster}
-          onAdd={onAddMerch} onSetPrice={onSetMerchPrice} onRemove={onRemoveMerch} onSetWrestler={onSetMerchWrestler}
+          onAdd={onAddMerch} onSetPrice={onSetMerchPrice} onRemove={onRemoveMerch} onSetWrestler={onSetMerchWrestler} onSetAllocation={onSetMerchAllocation}
           isMerch
         />
       )}
@@ -6238,7 +6669,7 @@ function ShopTab({
   );
 }
 
-function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove, onSetWrestler, isMerch }) {
+function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove, onSetWrestler, onSetAllocation, isMerch }) {
   return (
     <div>
       <p className="text-xs mb-3" style={{ color: C.inkFaint }}>
@@ -6261,6 +6692,7 @@ function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove
                 </div>
               ) : (
                 <div>
+                  <p className="text-[11px] mb-2" style={{ color: C.inkFaint }}>Cost {item.baseCost.toFixed(2)}/unit · Margin {money(Number(entry.price) - item.baseCost)}/unit</p>
                   <div className="flex items-center gap-2 mb-2">
                     <span className="wgm-mono text-[10px] w-14" style={{ color: C.inkFaint }}>{money(entry.price)}</span>
                     <input
@@ -6284,6 +6716,26 @@ function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove
                           );
                         })}
                       </div>
+                      {(entry.wrestlerIds || []).length > 1 && onSetAllocation && (
+                        <div className="mt-2 pt-2 space-y-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
+                          <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>ROYALTY SPLIT — drag to favor one over another (defaults to popularity share)</p>
+                          {(entry.wrestlerIds || []).map((wid) => {
+                            const w = roster.find((r) => r.id === wid);
+                            if (!w) return null;
+                            const weight = (entry.allocations || {})[wid] || 0;
+                            return (
+                              <div key={wid} className="flex items-center gap-2">
+                                <span className="text-[10px] w-24 truncate" style={{ color: C.inkFaint }}>{w.name}</span>
+                                <input
+                                  type="range" min="0" max="100" step="5"
+                                  value={weight} onChange={(e) => onSetAllocation(item.id, wid, Number(e.target.value))} className="flex-1"
+                                />
+                                <span className="wgm-mono text-[9px] w-6 text-right" style={{ color: C.inkFaint }}>{weight}</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="flex justify-end">
@@ -6544,6 +6996,11 @@ function PartnerModal({ partner, onClose }) {
         <p className="text-sm" style={{ color: C.ink }}>{partnerRelationshipReadout(rel)}</p>
       </div>
 
+      <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.ink }}>
+        <p className="wgm-mono text-[10px] mb-1.5" style={{ color: 'rgba(246,240,225,0.5)' }}>WHAT THEY'D SAY ABOUT YOU</p>
+        <p className="text-sm italic" style={{ color: C.cream }}>{partnerWouldSay(partner)}</p>
+      </div>
+
       {rel.history && rel.history.length > 0 && (
         <div>
           <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>RELATIONSHIP HISTORY</p>
@@ -6701,6 +7158,13 @@ function RivalsModal({ rivals, company, onClose, onSetRelationship, onSignPact, 
                 {inPact && <Pill bg={C.steel}>TERRITORY PACT</Pill>}
               </div>
               <p className="text-[11px] mb-2" style={{ color: C.inkFaint }}>{regionLabel} · {styleLabel}</p>
+              <p className="text-[10px] mb-1 italic" style={{ color: C.inkFaint }}>
+                {{ grow: 'Growth-focused', stabilize: 'Playing it safe', aggressive: 'Aggressively expanding' }[(r.strategy || {}).focus] || 'Building steadily'} · looking for {rivalRosterNeed(r)} talent
+              </p>
+              {r.owner && <p className="text-[10px] mb-2" style={{ color: C.inkFaint }}>Run by {r.owner.name} — {characterReadout(r.owner.character)}</p>}
+              {r.financialHealth !== undefined && r.financialHealth <= 25 && (
+                <p className="text-[10px] mb-2 font-semibold" style={{ color: C.rope }}>Financially struggling — vulnerable to poaching or collapse.</p>
+              )}
               <div className="h-1.5 rounded-full overflow-hidden mb-2" style={{ backgroundColor: C.canvasAlt }}>
                 <div className="h-full rounded-full" style={{ width: `${r.reputation}%`, backgroundColor: r.reputation > company.reputation ? C.rope : C.gold }} />
               </div>
