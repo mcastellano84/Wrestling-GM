@@ -4,7 +4,7 @@ import {
   Star, AlertTriangle, Plus, X, ChevronRight, ChevronUp, ChevronDown,
   Activity, Shield, Mic, Radio, Heart, Zap, RefreshCw, Home,
   UserPlus, UserMinus, Award, Flame, Clock, MapPin, Ticket, Loader2, Check,
-  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2, Palette, Newspaper, Briefcase, UserCircle, Mail, Bug
+  Crown, Globe, Truck, Coffee, ShoppingBag, Swords, Wrench, Tv, Building2, Palette, Newspaper, Briefcase, UserCircle, Mail, Bug, Pencil
 } from 'lucide-react';
 
 /* ============================================================
@@ -581,6 +581,26 @@ const CONCESSION_ITEMS_CATALOG = [
   { id: 'pizza', name: 'Pizza Slices', unlockCost: 800, baseCost: 2.2, suggestedPrice: 6.5, appeal: 0.85 },
   { id: 'candy', name: 'Candy', unlockCost: 250, baseCost: 0.7, suggestedPrice: 3, appeal: 0.6 },
 ];
+
+// Concessions mini-game (Lemonade Stand-style): unlike merch, concessions are perishable —
+// you stock fresh for every show, not a durable inventory that carries over. A hidden
+// "crowd appetite" roll drives demand each night; the player only ever sees a fuzzy forecast
+// bucket generated the moment a new show starts drafting, never the exact number. The real
+// number at settlement drifts from that forecast with its own noise, so the forecast is a
+// genuine hint, not a guarantee — same tension as guessing tomorrow's lemonade weather.
+function rollConcessionsForecast() {
+  return 0.5 + Math.random() * 1.1; // 0.5 - 1.6
+}
+function concessionsForecastInfo(roll) {
+  if (roll < 0.75) return { label: 'Light Appetite', hint: "Vendors aren't expecting much of a rush tonight — you might want to order light." };
+  if (roll < 1.05) return { label: 'Average Appetite', hint: 'Should be a fairly normal night at the stands.' };
+  if (roll < 1.35) return { label: 'Hungry Crowd', hint: 'Word is this crowd shows up hungry — could be a big night for concessions.' };
+  return { label: 'Ravenous', hint: 'This looks like a big-spending crowd — stock up if you can afford it.' };
+}
+function concessionsSettlementMult(forecastRoll) {
+  // The forecast is a hint, not a promise — actual appetite drifts from it with real noise.
+  return clamp(forecastRoll + (Math.random() - 0.5) * 0.6, 0.3, 1.9);
+}
 const MERCH_ITEMS_CATALOG = [
   { id: 'tshirt', name: 'T-Shirts', unlockCost: 800, baseCost: 5, suggestedPrice: 20, appeal: 1.0 },
   { id: 'poster', name: 'Posters', unlockCost: 300, baseCost: 1, suggestedPrice: 8, appeal: 0.6 },
@@ -612,20 +632,38 @@ function sellRateFor(item, price) {
   const elasticity = clamp(1.4 - priceRatio * 0.6, 0.25, 1.5);
   return clamp(item.appeal * 0.18 * elasticity, 0.01, 0.5);
 }
-function computeConcessionsRevenue(company, attendance) {
+function computeConcessionsResult(company, draftShow, attendance, demandMult) {
   let net = 0;
+  const qtySold = {};
+  const wasted = {};
+  const soldOutItemIds = [];
   const mult = suppliesMult(company.supplies !== undefined ? company.supplies : 100);
+  const order = (draftShow && draftShow.concessionsOrder) || {};
   (company.concessionsMenu || []).forEach((entry) => {
     const item = CONCESSION_ITEMS_CATALOG.find((i) => i.id === entry.itemId);
     if (!item) return;
-    const qty = Math.round(attendance * sellRateFor(item, entry.price) * mult);
-    net += qty * (Number(entry.price) - item.baseCost);
+    const orderedQty = Math.max(0, Math.round(order[entry.itemId] || 0));
+    if (orderedQty === 0) { qtySold[entry.itemId] = 0; wasted[entry.itemId] = 0; return; }
+    const demandQty = Math.round(attendance * sellRateFor(item, entry.price) * mult * demandMult);
+    const sold = Math.min(demandQty, orderedQty);
+    const leftover = Math.max(0, orderedQty - sold);
+    qtySold[entry.itemId] = sold;
+    wasted[entry.itemId] = leftover;
+    if (demandQty > orderedQty && sold > 0) soldOutItemIds.push(entry.itemId);
+    // Ingredients are bought fresh for every show (Phase 8 follow-up, Lemonade Stand
+    // style): you pay for everything ordered whether or not it sells. Unlike merch,
+    // nothing carries over — a bad guess is a sunk cost, not leftover stock.
+    const cost = orderedQty * item.baseCost;
+    const revenue = sold * Number(entry.price);
+    net += revenue - cost;
   });
-  return Math.max(0, Math.round(net));
+  return { net: Math.round(net), qtySold, wasted, soldOutItemIds };
 }
 function computeMerchResult(company, roster, attendance) {
   let net = 0;
   const royalties = {};
+  const qtySold = {};
+  const soldOutItemIds = [];
   let tapesActive = false;
   const mult = suppliesMult(company.supplies !== undefined ? company.supplies : 100);
   (company.merchMenu || []).forEach((entry) => {
@@ -636,7 +674,15 @@ function computeMerchResult(company, roster, attendance) {
     const assigned = ids.map((id) => roster.find((r) => r.id === id)).filter((w) => w && w.popularity >= MERCH_MIN_POPULARITY);
     const avgPop = assigned.length ? average(assigned.map((w) => w.popularity)) : 0;
     const popMult = assigned.length ? 1 + avgPop / 150 : 1;
-    const qty = Math.round(attendance * sellRateFor(item, entry.price) * popMult * mult);
+    const demandQty = Math.round(attendance * sellRateFor(item, entry.price) * popMult * mult);
+    // Digital items (tapes/downloads) have no physical inventory to run out of. Everything
+    // else can only sell what's actually been ordered and is sitting in stock — you place the
+    // order, you take the risk of over- or under-ordering (Phase 8 follow-up).
+    const isPhysical = !item.isAwareness;
+    const availableStock = isPhysical ? (entry.stock || 0) : Infinity;
+    const qty = Math.min(demandQty, availableStock);
+    qtySold[entry.itemId] = qty;
+    if (isPhysical && demandQty > availableStock && qty > 0) soldOutItemIds.push(entry.itemId);
     const grossProfit = qty * (Number(entry.price) - item.baseCost);
     let itemNet = grossProfit;
     if (assigned.length && grossProfit > 0) {
@@ -661,7 +707,7 @@ function computeMerchResult(company, roster, attendance) {
     }
     net += Math.max(0, itemNet);
   });
-  return { net: Math.max(0, Math.round(net)), royalties, tapesActive };
+  return { net: Math.max(0, Math.round(net)), royalties, tapesActive, qtySold, soldOutItemIds };
 }
 function weaponsEffectFor(matchTypeId, weaponsOwned, supplies) {
   if (!WEAPONS_MATCH_TYPES.includes(matchTypeId) || !weaponsOwned || !weaponsOwned.length) return { qualityBonus: 0, injuryMult: 1 };
@@ -713,6 +759,43 @@ function assignTraits() {
   return chosen;
 }
 
+/* ============================================================
+   PROGRESSION — XP and levels (Phase 8 follow-up). Every level
+   banks a skill point spendable directly on a stat of the
+   player's choice; every 5th level banks a bonus point on top of
+   that instead of a slower single point. Traits/perks are NOT
+   touched by leveling — they stay exactly as they already worked
+   (assignTraits() at generation, evolveWrestlerTraits/
+   evolveStaffTrait organically during play). Leveling is a pure
+   stat-allocation system layered on top, not a second trait source.
+   ============================================================ */
+const MILESTONE_LEVEL_INTERVAL = 5;
+function xpToNextLevel(level) {
+  return 100 + (level - 1) * 40;
+}
+// Applies an XP gain and resolves any number of level-ups in one pass. Milestone levels
+// (every 5th) bank an extra bonus skill point rather than anything trait-related.
+function applyXpGain(entity, xpGain) {
+  let xp = (entity.xp || 0) + Math.max(0, Math.round(xpGain));
+  let level = entity.level || 1;
+  let skillPoints = entity.skillPoints || 0;
+  const milestonesHit = [];
+  while (xp >= xpToNextLevel(level)) {
+    xp -= xpToNextLevel(level);
+    level += 1;
+    skillPoints += 1;
+    if (level % MILESTONE_LEVEL_INTERVAL === 0) { skillPoints += 1; milestonesHit.push(level); }
+  }
+  return { xp, level, skillPoints, milestonesHit };
+}
+const WRESTLER_STAT_KEYS = ['strength', 'technical', 'aerial', 'charisma', 'stamina'];
+// Card positioning has real consequences (Phase 8 follow-up). The player can put anyone
+// anywhere on the card — nothing blocks it — but a Jobber/Rookie thrust into the main event
+// slot they aren't remotely ready for comes off like a nervous wreck, and a Star/Legend kept
+// off the top of the card too long despite clearly having earned it grows genuinely resentful.
+const CARD_TIER_RANK = { Jobber: 0, Rookie: 1, 'Mid-Card': 2, Star: 3, Legend: 4, Celebrity: 3 };
+const WEEKS_HELD_BACK_THRESHOLD = 10;
+
 const STAFF_TRAITS = [
   { id: 'golden_voice', label: 'Golden Voice', polarity: 'positive', mod: 12, roles: ['Announcer', 'Commentator'] },
   { id: 'showstopper', label: 'Showstopper', polarity: 'positive', mod: 8, roles: ['Announcer', 'Commentator'] },
@@ -732,6 +815,33 @@ const assignStaffTrait = (role) => {
 function staffEffectiveQuality(s) {
   const t = STAFF_TRAITS.find((x) => x.id === s.trait);
   return clamp(s.quality + (t ? t.mod : 0), 1, 100);
+}
+// Role-specific stats — staff aren't one "quality" number, they're specific skills that
+// happen to average into a quality score every downstream system (match sim, fill rate,
+// writer tier gating, salary) already reads. This keeps all of that wiring untouched while
+// giving the person underneath real, differentiated traits to develop.
+const STAFF_ROLE_STATS = {
+  Announcer: ['charisma', 'vocals', 'presence'],
+  Commentator: ['charisma', 'vocals', 'presence'],
+  Referee: ['positioning', 'composure', 'rulebook'],
+  Writer: ['creativity', 'pacing', 'insight'],
+  'Road Agent': ['mentorship', 'psychology', 'toughness'],
+};
+const STAFF_STAT_LABELS = {
+  charisma: 'Charisma', vocals: 'Vocals', presence: 'Presence',
+  positioning: 'Positioning', composure: 'Composure', rulebook: 'Rulebook Knowledge',
+  creativity: 'Creativity', pacing: 'Pacing', insight: 'Insight',
+  mentorship: 'Mentorship', psychology: 'Psychology', toughness: 'Toughness',
+};
+function generateStaffStats(role) {
+  const keys = STAFF_ROLE_STATS[role] || STAFF_ROLE_STATS['Road Agent'];
+  const stats = {};
+  keys.forEach((k) => { stats[k] = randInt(30, 90); });
+  return stats;
+}
+function staffQualityFromStats(stats) {
+  const vals = Object.values(stats || {});
+  return vals.length ? Math.round(average(vals)) : 50;
 }
 function staffRoleKey(role) {
   if (role === 'Announcer') return 'announcers';
@@ -1066,6 +1176,12 @@ function negotiationFit(character, termId, offerQuality, reputation, contractWee
     if (values.includes('honor')) score += 10;
     if (d.patience < 40) score += 10;
     if (needs.includes('belonging') || needs.includes('security')) score -= 10;
+  } else if (termId === 'job_security') {
+    if (needs.includes('security')) score += 25;
+    if (needs.includes('belonging')) score += 10;
+    if (values.includes('loyalty')) score += 10;
+    if (d.riskTolerance < 40) score += 10;
+    if (needs.includes('freedom')) score -= 10;
   }
   if (offerQuality !== undefined) score += (offerQuality - 1) * 55;
   if (reputation !== undefined) {
@@ -1086,7 +1202,7 @@ function negotiationFit(character, termId, offerQuality, reputation, contractWee
   // of promise all over again (Phase 6: memories feeding into a real decision, not just flavor).
   const brokenPromise = (storyline || []).find((e) => e.type === 'promise' && e.valence < 0 && (e.importance || 0) >= 6);
   if (brokenPromise) {
-    if (termId === 'promise_title' || termId === 'creative_control') score -= 20;
+    if (termId === 'promise_title' || termId === 'creative_control' || termId === 'job_security') score -= 20;
     else score -= 6;
   }
   return clamp(score, 0, 100);
@@ -1104,7 +1220,7 @@ function negotiationRejectionReason(w, termId) {
   const c = w.character;
   if (!c) return `${w.name} turns down the offer.`;
   const brokenPromise = (w.storyline || []).find((e) => e.type === 'promise' && e.valence < 0 && (e.importance || 0) >= 6);
-  if (brokenPromise && (termId === 'promise_title' || termId === 'creative_control')) {
+  if (brokenPromise && (termId === 'promise_title' || termId === 'creative_control' || termId === 'job_security')) {
     return `${w.name} turns it down. They remember what happened last time someone made them a promise around here.`;
   }
   if (termId === 'standard' && (c.needs.includes('freedom') || c.needs.includes('recognition'))) {
@@ -1115,6 +1231,9 @@ function negotiationRejectionReason(w, termId) {
   }
   if (termId === 'creative_control' && (c.needs.includes('belonging') || c.needs.includes('security'))) {
     return `${w.name} turns it down. Creative control means nothing to someone who just wants to feel like part of something.`;
+  }
+  if (termId === 'job_security' && c.needs.includes('freedom')) {
+    return `${w.name} turns it down. Being locked into one place for a stretch isn't what someone chasing freedom wants to hear.`;
   }
   return `${w.name} turns down the offer. It just doesn't sit right with who they are — they value ${VALUE_LABELS[c.values[0]] || c.values[0]} more than what's on the table.`;
 }
@@ -1172,19 +1291,33 @@ function generateWrestler(tier, regionId = 'usa', styleId = 'sports_entertainmen
     weight: clamp(180 + Math.round((stats.strength / 99) * 130) + randInt(-15, 15), 175, 340),
     contractPromise: null,
     character: generateCharacterCore(),
+    xp: 0, level: 1, skillPoints: 0, weeksSinceMainEvent: 0,
   };
 }
 
 function generateStaff(role) {
-  const quality = randInt(35, 92);
-  return { id: uid(), name: `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`, role, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait(role), ambition: assignStaffAmbition(), weeksEmployed: 0 };
+  const stats = generateStaffStats(role);
+  const quality = staffQualityFromStats(stats);
+  return { id: uid(), name: `${pick(FIRST_NAMES)} ${pick(LAST_NAMES)}`, role, stats, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait(role), ambition: assignStaffAmbition(), weeksEmployed: 0, character: generateCharacterCore(), storyline: [], xp: 0, level: 1, skillPoints: 0 };
 }
 // Retirement doesn't have to be a dead end — a veteran's ring knowledge becomes staff
 // quality. Legacy through the people they go on to influence (Phase 7: mentorship/lineage).
-function wrestlerToStaffMember(w, role) {
+// Carries over the wrestler's OWN Character Core rather than generating a new one — this is
+// still the same person, just in a different role, and their storyline continues rather than
+// resetting (Phase 8 staff-parity follow-up).
+function wrestlerToStaffMember(w, role, week, year) {
   const experienceScore = clamp((w.matchesWrestled || 0) / 2, 0, 30);
-  const quality = clamp(Math.round((w.popularity * 0.4) + ((w.stats && w.stats.charisma) || 50) * 0.3 + experienceScore), 30, 96);
-  return { id: uid(), name: w.name, role, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait(role), ambition: assignStaffAmbition(), weeksEmployed: 0, formerWrestler: true };
+  const stats = generateStaffStats(role);
+  // A meaningful continuity touch: their in-ring charisma/experience seeds the equivalent
+  // stat in their new role, rather than every transitioned wrestler starting from a blank slate.
+  if ((role === 'Announcer' || role === 'Commentator') && w.stats) {
+    stats.charisma = clamp(Math.round(w.stats.charisma * 0.6 + stats.charisma * 0.4), 10, 99);
+  }
+  if (role === 'Road Agent') stats.psychology = clamp(Math.round(stats.psychology + experienceScore), 10, 99);
+  if (role === 'Writer') stats.insight = clamp(Math.round(stats.insight + experienceScore * 0.7), 10, 99);
+  const quality = staffQualityFromStats(stats);
+  const transitionEntry = { week: week || 1, year: year || 1, text: `Hung up the boots after a career in the ring and moved into a ${role} role.`, importance: 8, valence: 1, type: 'signing' };
+  return { id: uid(), name: w.name, role, stats, quality, salary: Math.round(80 + quality * 4.2), trait: assignStaffTrait(role), ambition: assignStaffAmbition(), weeksEmployed: 0, formerWrestler: true, character: w.character || generateCharacterCore(), storyline: [...(w.storyline || []), transitionEntry].slice(-30), xp: 0, level: 1, skillPoints: 0 };
 }
 
 function generateFreeAgentPool(regionId = 'usa', styleId = 'sports_entertainment', count = 14, rookieHeavy = false) {
@@ -1422,6 +1555,13 @@ const CONTRACT_TERMS = [
   { id: 'standard', label: 'Standard Contract', bonusMult: 1, blurb: 'Pay the full signing bonus. No strings attached.' },
   { id: 'promise_title', label: 'Promise the Title', bonusMult: 0.5, blurb: "Half the signing bonus — but you're promising they'll be champion within 15 weeks. Break that promise and it costs you.", promiseType: 'title', promiseWeeks: 15 },
   { id: 'creative_control', label: 'Creative Control Clause', bonusMult: 0.75, blurb: "A smaller discount, but they can't be released for 10 weeks without a real hit to your reputation as a boss.", promiseType: 'job_security', promiseWeeks: 10 },
+];
+// Staff get the same negotiation model as wrestlers, minus the terms that only make sense
+// for an in-ring career (nobody promises a producer a title shot). Job security is the one
+// promise type that generalizes cleanly.
+const STAFF_CONTRACT_TERMS = [
+  { id: 'standard', label: 'Standard Contract', bonusMult: 1, blurb: 'Pay the full signing bonus. No strings attached.' },
+  { id: 'job_security', label: 'Job Security Clause', bonusMult: 0.7, blurb: "A smaller signing bonus, but they can't be let go for 10 weeks without a real hit to your reputation as a boss.", promiseType: 'job_security', promiseWeeks: 10 },
 ];
 function checkContractPromise(w, ctx, week, year) {
   const promise = w.contractPromise;
@@ -2094,6 +2234,15 @@ function computePromoPop(promo, wrestlerLookup, staffLookup) {
   return clamp(Math.round(base), 5, 100);
 }
 
+// Informal/backyard pay (pre-graduation): a wrestler signed before the promotion has run
+// its first show at a real, non-private venue works for reduced/deferred pay rather than
+// their full listed salary. Flips off permanently for everyone the moment the company
+// graduates (see runShow's justGraduated handling). Floor of $20/wk so it's never literally
+// free labor.
+const INFORMAL_PAY_RATE = 0.35;
+function effectiveWrestlerSalary(w) {
+  return w.informalPay ? Math.max(20, Math.round(w.salary * INFORMAL_PAY_RATE)) : w.salary;
+}
 function computeFillFactors(draftShow, game) {
   const venue = ALL_VENUES.find((v) => v.id === draftShow.venueId) || ALL_VENUES[0];
   const rosterPopAvg = average(game.roster.map((w) => w.popularity)) || 10;
@@ -2111,20 +2260,24 @@ function computeFillFactors(draftShow, game) {
   const fillRate = clamp(0.25 + repFactor + popFactor + marketingFactor + staffFactor + productionBonus + tvBonus + crowdMatchFactor - priceFactor, 0.08, 0.99);
   const attendance = Math.round(venue.capacity * fillRate);
   const effectiveRent = Math.round(venue.rent * (1 - currentTier(game.company, 'transport').rentDiscount));
-  const payroll = sum(game.roster.map((w) => w.salary)) + sum(staffAll.map((s) => s.salary));
+  const payroll = sum(game.roster.map((w) => effectiveWrestlerSalary(w))) + sum(staffAll.map((s) => s.salary));
   return { venue, fillRate, attendance, payroll, rosterPopAvg, effectiveRent };
 }
 
 function estimateShow(draftShow, game) {
   const { venue, fillRate, attendance, payroll, effectiveRent } = computeFillFactors(draftShow, game);
   const diff = DIFFICULTY_CONFIG[game.company.difficulty] || DIFFICULTY_CONFIG.normal;
-  const concessions = computeConcessionsRevenue(game.company, attendance);
+  // The estimate uses the visible forecast roll, not the hidden settlement roll — the whole
+  // point of the concessions mini-game is that actual results can drift from this preview.
+  const forecastRoll = draftShow.concessionsForecastRoll || 1;
+  const concessionsEst = computeConcessionsResult(game.company, draftShow, attendance, forecastRoll);
+  const concessions = concessionsEst.net;
   const merch = computeMerchResult(game.company, game.roster, attendance).net;
   const tvNetwork = tvNetworkFor(game.company);
   const tv = tvNetwork ? tvNetwork.weeklyFee : 0;
   const revenue = (attendance * draftShow.ticketPrice + concessions + merch + tv) * diff.revenueMult;
   const expenses = (effectiveRent + draftShow.marketingBudget + payroll) * diff.expenseMult;
-  return { attendance, capacity: venue.capacity, revenue, expenses, profit: revenue - expenses, fillRate, venue };
+  return { attendance, capacity: venue.capacity, revenue, expenses, profit: revenue - expenses, fillRate, venue, concessionsEst };
 }
 
 function simulateShow(draftShow, game) {
@@ -2152,7 +2305,10 @@ function simulateShow(draftShow, game) {
   const promoResults = draftShow.card.filter((s) => s.kind === 'promo').map((p) => ({ ...p, pop: computePromoPop(p, wrestlerLookup, staffLookup) }));
 
   const ticketRevenue = Math.round(attendance * draftShow.ticketPrice * diff.revenueMult);
-  const concessionsRevenue = Math.round(computeConcessionsRevenue(game.company, attendance) * diff.revenueMult);
+  // The hidden roll — actual crowd appetite tonight, only ever revealed after the show runs.
+  const concessionsActualMult = concessionsSettlementMult(draftShow.concessionsForecastRoll || 1);
+  const concessionsResult = computeConcessionsResult(game.company, draftShow, attendance, concessionsActualMult);
+  const concessionsRevenue = Math.round(concessionsResult.net * diff.revenueMult);
   const merchResult = computeMerchResult(game.company, game.roster, attendance);
   const merchRevenue = Math.round(merchResult.net * diff.revenueMult);
   const tvNetwork = tvNetworkFor(game.company);
@@ -2172,7 +2328,7 @@ function simulateShow(draftShow, game) {
     else crowdVerdict = 'flat';
   }
 
-  return { venue, matchResults, promoResults, attendance, ticketRevenue, concessionsRevenue, merchRevenue, tvRevenue, merchRoyalties: merchResult.royalties, revenue, expenses, payroll, netProfit, avgStars, avgPromoPop, repDelta, fillRate, crowdVerdict };
+  return { venue, matchResults, promoResults, attendance, ticketRevenue, concessionsRevenue, merchRevenue, tvRevenue, merchRoyalties: merchResult.royalties, merchQtySold: merchResult.qtySold, merchSoldOutItemIds: merchResult.soldOutItemIds, concessionsQtySold: concessionsResult.qtySold, concessionsWasted: concessionsResult.wasted, concessionsSoldOutItemIds: concessionsResult.soldOutItemIds, concessionsAppetiteMult: concessionsActualMult, revenue, expenses, payroll, netProfit, avgStars, avgPromoPop, repDelta, fillRate, crowdVerdict };
 }
 
 /* ============================================================
@@ -2181,7 +2337,7 @@ function simulateShow(draftShow, game) {
 const STORAGE_KEY = 'wgm-save-v1';
 
 function makeEmptyDraft() {
-  return { venueId: 'gym', ticketPrice: 20, marketingBudget: 0, showName: '', card: [] };
+  return { venueId: 'gym', ticketPrice: 20, marketingBudget: 0, showName: '', card: [], concessionsOrder: {}, concessionsForecastRoll: rollConcessionsForecast() };
 }
 const MARKETING_TIERS = [
   { id: 'word_of_mouth', label: 'Word of Mouth', cost: 0, blurb: 'Free — let the fans spread it themselves.' },
@@ -2218,9 +2374,12 @@ function createNewGame(opts) {
   const venuePath = STARTUP_VENUE_PATHS.find((v) => v.id === resolvedVenuePathId) || STARTUP_VENUE_PATHS[0];
   const recruitingMethod = STARTUP_RECRUITING_METHODS.find((m) => m.id === resolvedRecruitingId) || STARTUP_RECRUITING_METHODS[2];
 
+  // Informal pay: only Backyard Shows starts the company "ungraduated" — Gym/Warehouse
+  // are already real, paid venues from day one, so those starts skip informal pay entirely.
+  const startingVenueGraduated = resolvedVenuePathId !== 'backyard';
   const believer = generateWrestler('Rookie', region, style);
   if (recruitingMethod.statBias) believer.stats[recruitingMethod.statBias] = clamp(believer.stats[recruitingMethod.statBias] + 15, 5, 99);
-  const startingRoster = [{ ...believer, storyline: [{ week: 1, year: 1, text: `Found via ${recruitingMethod.label.toLowerCase()} and believed in this promotion from day one.` }] }];
+  const startingRoster = [{ ...believer, informalPay: !startingVenueGraduated, storyline: [{ week: 1, year: 1, text: `Found via ${recruitingMethod.label.toLowerCase()} and believed in this promotion from day one.` }] }];
 
   const relationship = initPartnerRelationship(partner.archetypeId, {
     ring: resolvedRingOriginId, venue: resolvedVenuePathId, recruiting: resolvedRecruitingId,
@@ -2238,6 +2397,9 @@ function createNewGame(opts) {
     `${finalPartner.name} on ${believer.name}: "${partnerReaction(finalPartner.archetypeId, 'recruiting', resolvedRecruitingId, isRecruitingDelegated)}"`,
     background.blurb,
   ];
+  if (!startingVenueGraduated) {
+    openingNews.push(`Nobody's getting a real paycheck out of a backyard show — ${believer.name} and anyone else you sign are working informal terms until you run a show at a real venue.`);
+  }
 
   return {
     saveVersion: SAVE_VERSION,
@@ -2250,11 +2412,12 @@ function createNewGame(opts) {
       difficulty: difficultyId, theme: resolvedTheme,
       background: background.id,
       bossReputation: clamp(50 + background.bossRepMod, 0, 100),
+      venueGraduated: startingVenueGraduated,
       upgrades: { ...DEFAULT_UPGRADES, ring: ringOrigin.ringLevel },
       ringShape: DEFAULT_RING_SHAPE,
       ringShapesOwned: [DEFAULT_RING_SHAPE],
       concessionsMenu: [{ itemId: 'hotdogs', price: 5 }, { itemId: 'soda', price: 4 }],
-      merchMenu: [{ itemId: 'tshirt', price: 20, wrestlerIds: [] }],
+      merchMenu: [{ itemId: 'tshirt', price: 20, wrestlerIds: [], allocations: {}, stock: 0 }],
       weaponsOwned: [],
       tvDeal: null,
       matchResearch: { unlockedTypes: [], inProgress: null },
@@ -2295,8 +2458,38 @@ function normalizeGame(loaded) {
     const titleId = item.titleId !== undefined ? item.titleId : null;
     return { ...item, winnerIds, titleId };
   });
-  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, wellnessProgramCount: w.wellnessProgramCount || 0, tierTrendWeeks: w.tierTrendWeeks || 0, timesRenewed: w.timesRenewed || 0, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280), contractPromise: w.contractPromise !== undefined ? w.contractPromise : null, character: w.character || generateCharacterCore() });
-  const fixStaff = (s) => ({ ...s, trait: s.trait !== undefined ? s.trait : null, ambition: { unhappyStreak: 0, contentStreak: 0, ...(s.ambition || assignStaffAmbition()) }, weeksEmployed: s.weeksEmployed || 0 });
+  const fixWrestler = (w) => ({ ...w, traits: w.traits || [], age: w.age || randInt(24, 36), ambition: { unhappyStreak: 0, contentStreak: 0, ...(w.ambition || assignWrestlerAmbition()) }, merchEarnings: w.merchEarnings || 0, matchesWrestled: w.matchesWrestled || 0, gender: w.gender || (Math.random() < 0.5 ? 'male' : 'female'), careerInjuries: w.careerInjuries || 0, matchesSinceInjury: w.matchesSinceInjury || 0, confidence: w.confidence !== undefined ? w.confidence : randInt(50, 75), wellness: w.wellness || { status: 'stable', weeksInStatus: 0 }, wellnessProgramCount: w.wellnessProgramCount || 0, tierTrendWeeks: w.tierTrendWeeks || 0, timesRenewed: w.timesRenewed || 0, informalPay: w.informalPay || false, storyline: w.storyline || [], hometown: w.hometown || pick(REGION_HOMETOWNS.usa), weight: w.weight || randInt(210, 280), contractPromise: w.contractPromise !== undefined ? w.contractPromise : null, character: w.character || generateCharacterCore(), xp: w.xp || 0, level: w.level || 1, skillPoints: w.skillPoints || 0, weeksSinceMainEvent: w.weeksSinceMainEvent || 0 });
+  const fixStaff = (s, isHired) => {
+    // Old saves only had a single blind quality number. Reconstruct plausible per-stat values
+    // clustered around it so nobody's effective quality visibly jumps just from loading —
+    // the new depth appears going forward as they level up, not retroactively.
+    const stats = s.stats || (() => {
+      const keys = STAFF_ROLE_STATS[s.role] || STAFF_ROLE_STATS['Road Agent'];
+      const base = s.quality !== undefined ? s.quality : 50;
+      const out = {};
+      keys.forEach((k) => { out[k] = clamp(base + randInt(-8, 8), 5, 99); });
+      return out;
+    })();
+    return {
+      ...s,
+      stats,
+      quality: s.quality !== undefined ? s.quality : staffQualityFromStats(stats),
+      trait: s.trait !== undefined ? s.trait : null,
+      ambition: { unhappyStreak: 0, contentStreak: 0, ...(s.ambition || assignStaffAmbition()) },
+      weeksEmployed: s.weeksEmployed || 0,
+      character: s.character || generateCharacterCore(),
+      storyline: s.storyline || [],
+      // Old saves' already-hired staff were indefinite hires with no contract at all — backfill
+      // a plausible remaining term so they don't all expire simultaneously the week this loads.
+      // Pool candidates were never under contract, so they stay null until actually hired.
+      contractWeeksLeft: isHired ? (s.contractWeeksLeft !== undefined && s.contractWeeksLeft !== null ? s.contractWeeksLeft : randInt(15, 30)) : (s.contractWeeksLeft !== undefined ? s.contractWeeksLeft : null),
+      contractPromise: s.contractPromise !== undefined ? s.contractPromise : null,
+      timesRenewed: s.timesRenewed || 0,
+      xp: s.xp || 0,
+      level: s.level || 1,
+      skillPoints: s.skillPoints || 0,
+    };
+  };
   const loadedCompany = loaded.company || {};
   const oldUpgrades = loadedCompany.upgrades || {};
   const migratedWeapons = loadedCompany.weaponsOwned || (oldUpgrades.weapons ? ['chairs', 'tables'] : []);
@@ -2318,7 +2511,7 @@ function normalizeGame(loaded) {
       ringShape: loadedCompany.ringShape || DEFAULT_RING_SHAPE,
       ringShapesOwned: loadedCompany.ringShapesOwned || [DEFAULT_RING_SHAPE],
       concessionsMenu: loadedCompany.concessionsMenu || [],
-      merchMenu: (loadedCompany.merchMenu || []).map((e) => ({ itemId: e.itemId, price: e.price, wrestlerIds: e.wrestlerIds || (e.wrestlerId ? [e.wrestlerId] : []) })),
+      merchMenu: (loadedCompany.merchMenu || []).map((e) => ({ itemId: e.itemId, price: e.price, wrestlerIds: e.wrestlerIds || (e.wrestlerId ? [e.wrestlerId] : []), allocations: e.allocations || {}, stock: e.stock || 0 })),
       weaponsOwned: migratedWeapons,
       tvDeal: loadedCompany.tvDeal || null,
       matchResearch: loadedCompany.matchResearch || { unlockedTypes: [], inProgress: null },
@@ -2332,6 +2525,7 @@ function normalizeGame(loaded) {
       acquisitionsCount: loadedCompany.acquisitionsCount || 0,
       background: loadedCompany.background || 'family',
       bossReputation: loadedCompany.bossReputation !== undefined ? loadedCompany.bossReputation : 50,
+      venueGraduated: loadedCompany.venueGraduated !== undefined ? loadedCompany.venueGraduated : true,
     },
     titles: loaded.titles || [],
     tagTeams: loaded.tagTeams || [],
@@ -2350,20 +2544,22 @@ function normalizeGame(loaded) {
     roster: (loaded.roster || []).map(fixWrestler),
     freeAgents: (loaded.freeAgents || []).map(fixWrestler),
     staff: {
-      announcers: (loaded.staff?.announcers || []).map(fixStaff),
-      commentators: (loaded.staff?.commentators || []).map(fixStaff),
-      referees: (loaded.staff?.referees || []).map(fixStaff),
-      writers: (loaded.staff?.writers || []).map(fixStaff),
-      roadAgents: (loaded.staff?.roadAgents || []).map(fixStaff),
+      announcers: (loaded.staff?.announcers || []).map((s) => fixStaff(s, true)),
+      commentators: (loaded.staff?.commentators || []).map((s) => fixStaff(s, true)),
+      referees: (loaded.staff?.referees || []).map((s) => fixStaff(s, true)),
+      writers: (loaded.staff?.writers || []).map((s) => fixStaff(s, true)),
+      roadAgents: (loaded.staff?.roadAgents || []).map((s) => fixStaff(s, true)),
     },
     staffPool: {
-      announcers: (loaded.staffPool?.announcers || []).map(fixStaff),
-      commentators: (loaded.staffPool?.commentators || []).map(fixStaff),
-      referees: (loaded.staffPool?.referees && loaded.staffPool.referees.length ? loaded.staffPool.referees : Array.from({ length: 3 }, () => generateStaff('Referee'))).map(fixStaff),
-      writers: (loaded.staffPool?.writers && loaded.staffPool.writers.length ? loaded.staffPool.writers : Array.from({ length: 3 }, () => generateStaff('Writer'))).map(fixStaff),
-      roadAgents: (loaded.staffPool?.roadAgents && loaded.staffPool.roadAgents.length ? loaded.staffPool.roadAgents : Array.from({ length: 3 }, () => generateStaff('Road Agent'))).map(fixStaff),
+      announcers: (loaded.staffPool?.announcers || []).map((s) => fixStaff(s, false)),
+      commentators: (loaded.staffPool?.commentators || []).map((s) => fixStaff(s, false)),
+      referees: (loaded.staffPool?.referees && loaded.staffPool.referees.length ? loaded.staffPool.referees : Array.from({ length: 3 }, () => generateStaff('Referee'))).map((s) => fixStaff(s, false)),
+      writers: (loaded.staffPool?.writers && loaded.staffPool.writers.length ? loaded.staffPool.writers : Array.from({ length: 3 }, () => generateStaff('Writer'))).map((s) => fixStaff(s, false)),
+      roadAgents: (loaded.staffPool?.roadAgents && loaded.staffPool.roadAgents.length ? loaded.staffPool.roadAgents : Array.from({ length: 3 }, () => generateStaff('Road Agent'))).map((s) => fixStaff(s, false)),
     },
-    draftShow: loaded.draftShow ? { showName: '', ...loaded.draftShow, card: fixCard(loaded.draftShow.card) } : makeEmptyDraft(),
+    draftShow: loaded.draftShow
+      ? { showName: '', ...loaded.draftShow, card: fixCard(loaded.draftShow.card), concessionsOrder: loaded.draftShow.concessionsOrder || {}, concessionsForecastRoll: loaded.draftShow.concessionsForecastRoll !== undefined ? loaded.draftShow.concessionsForecastRoll : rollConcessionsForecast() }
+      : makeEmptyDraft(),
   };
 }
 
@@ -2480,6 +2676,62 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
+function ThemeEditorModal({ theme, onClose, onSave }) {
+  const isCustom = theme && theme.presetId === 'custom';
+  const [mode, setMode] = useState(isCustom ? 'custom' : 'preset');
+  const [presetId, setPresetId] = useState(!isCustom && theme && theme.presetId ? theme.presetId : 'classic');
+  const [customGold, setCustomGold] = useState(isCustom ? theme.gold : '#C4922E');
+  const [customRope, setCustomRope] = useState(isCustom ? theme.rope : '#AC3A2C');
+  const previewTheme = mode === 'custom'
+    ? { gold: customGold, goldSoft: shadeHex(customGold, 45), rope: customRope, ropeDark: shadeHex(customRope, -25) }
+    : (THEME_PRESETS.find((t) => t.id === presetId) || THEME_PRESETS[0]);
+  function handleSave() {
+    const chosen = mode === 'custom'
+      ? { presetId: 'custom', gold: customGold, goldSoft: shadeHex(customGold, 45), rope: customRope, ropeDark: shadeHex(customRope, -25) }
+      : { presetId, ...(THEME_PRESETS.find((t) => t.id === presetId) || THEME_PRESETS[0]) };
+    onSave(chosen);
+    onClose();
+  }
+  return (
+    <Modal title="Company Colors" onClose={onClose}>
+      <p className="text-xs mb-4" style={{ color: C.inkFaint }}>Pick a preset or set your own primary and accent colors. Applies everywhere right away — doesn't cost a day.</p>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        {THEME_PRESETS.map((t) => (
+          <button key={t.id} onClick={() => { setMode('preset'); setPresetId(t.id); }} className="rounded-lg p-2 flex flex-col items-center gap-1.5" style={{ backgroundColor: mode === 'preset' && presetId === t.id ? C.ink : C.canvasAlt, border: `1px solid ${mode === 'preset' && presetId === t.id ? t.gold : C.line}` }}>
+            <div className="flex gap-1">
+              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.gold }} />
+              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: t.rope }} />
+            </div>
+            <span className="text-[9px]" style={{ color: mode === 'preset' && presetId === t.id ? C.cream : C.ink }}>{t.name}</span>
+          </button>
+        ))}
+        <button onClick={() => setMode('custom')} className="rounded-lg p-2 flex flex-col items-center gap-1.5 justify-center" style={{ backgroundColor: mode === 'custom' ? C.ink : C.canvasAlt, border: `1px solid ${mode === 'custom' ? customGold : C.line}` }}>
+          <Wrench size={16} color={mode === 'custom' ? C.cream : C.ink} />
+          <span className="text-[9px]" style={{ color: mode === 'custom' ? C.cream : C.ink }}>Custom</span>
+        </button>
+      </div>
+      {mode === 'custom' && (
+        <div className="flex items-center justify-center gap-4 mb-4 wgm-pop">
+          <label className="flex flex-col items-center gap-1">
+            <span className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>PRIMARY</span>
+            <input type="color" value={customGold} onChange={(e) => setCustomGold(e.target.value)} className="w-10 h-10 rounded-full border-0 bg-transparent cursor-pointer" />
+          </label>
+          <label className="flex flex-col items-center gap-1">
+            <span className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>ACCENT</span>
+            <input type="color" value={customRope} onChange={(e) => setCustomRope(e.target.value)} className="w-10 h-10 rounded-full border-0 bg-transparent cursor-pointer" />
+          </label>
+        </div>
+      )}
+      <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.ink }}>
+        <p className="wgm-mono text-[9px] mb-2" style={{ color: 'rgba(246,240,225,0.5)' }}>PREVIEW</p>
+        <p className="wgm-display text-lg mb-2" style={{ color: previewTheme.gold }}>Championship Gold</p>
+        <span className="wgm-mono text-[10px] px-2 py-0.5 rounded-full inline-block" style={{ backgroundColor: previewTheme.rope, color: C.cream }}>Rope Accent</span>
+      </div>
+      <PrimaryButton full onClick={handleSave}>Save Colors</PrimaryButton>
+    </Modal>
+  );
+}
+
 /* ============================================================
    MAIN APP
    ============================================================ */
@@ -2515,6 +2767,8 @@ export default function WrestlingGM() {
   const [showResult, setShowResult] = useState(null);
   const [matchBuilderOpen, setMatchBuilderOpen] = useState(false);
   const [promoBuilderOpen, setPromoBuilderOpen] = useState(false);
+  const [editCardIndex, setEditCardIndex] = useState(null);
+  const [themeEditorOpen, setThemeEditorOpen] = useState(false);
   const [titleBuilderOpen, setTitleBuilderOpen] = useState(false);
   const [selectedTitle, setSelectedTitle] = useState(null);
   const [teamBuilderOpen, setTeamBuilderOpen] = useState(false);
@@ -2805,7 +3059,7 @@ export default function WrestlingGM() {
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
-        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline, importance: 6, valence: 1, type: 'signing' }].slice(-30) }],
+        roster: [...g.roster, { ...w, salary: weeklyWage, informalPay: !g.company.venueGraduated, contractWeeksLeft: contractWeeks, contractPromise, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: signStoryline + termStoryline, importance: 6, valence: 1, type: 'signing' }].slice(-30) }],
         freeAgents: g.freeAgents.filter((f) => f.id !== id),
         relationships,
       });
@@ -3047,7 +3301,7 @@ export default function WrestlingGM() {
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus, bossReputation: bumpBossRep(g, -1) },
-        roster: [...g.roster, { ...w, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, discoveredVia: `poached from ${rival.name}`, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Poached away from ${rival.name}.`, importance: 6, valence: 1, type: 'signing' }].slice(-30) }],
+        roster: [...g.roster, { ...w, salary: weeklyWage, informalPay: !g.company.venueGraduated, contractWeeksLeft: contractWeeks, contractPromise, discoveredVia: `poached from ${rival.name}`, storyline: [...(w.storyline || []), { week: g.company.week, year: g.company.year, text: `Poached away from ${rival.name}.`, importance: 6, valence: 1, type: 'signing' }].slice(-30) }],
         rivals: g.rivals.map((r) => (r.id === rivalId ? {
           ...r,
           roster: (r.roster || []).filter((x) => x.id !== wrestlerId),
@@ -3123,17 +3377,21 @@ export default function WrestlingGM() {
 
   /* ---------- Merchandise ---------- */
   function addMerchItem(itemId) {
+    let outcome = 'none';
     updateGame((g) => {
-      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
+      if (!canActToday(g.company)) { outcome = 'no_time'; return g; }
       const item = MERCH_ITEMS_CATALOG.find((i) => i.id === itemId);
       if (!item || g.company.merchMenu.some((e) => e.itemId === itemId)) return g;
-      if (g.company.funds < item.unlockCost) { showToast('Not enough funds.'); return g; }
+      if (g.company.funds < item.unlockCost) { outcome = 'no_funds'; return g; }
+      outcome = 'added';
       return tickOneDay({
         ...g,
-        company: { ...g.company, funds: g.company.funds - item.unlockCost, merchMenu: [...g.company.merchMenu, { itemId, price: item.suggestedPrice, wrestlerIds: [] }] },
+        company: { ...g.company, funds: g.company.funds - item.unlockCost, merchMenu: [...g.company.merchMenu, { itemId, price: item.suggestedPrice, wrestlerIds: [], allocations: {}, stock: 0 }] },
       });
     });
-    showToast('Added to merch menu.');
+    if (outcome === 'no_time') showToast('No time left this week — run the show or wait for next week.');
+    else if (outcome === 'no_funds') showToast('Not enough funds.');
+    else if (outcome === 'added') showToast('Added to merch menu.');
   }
   function setMerchPrice(itemId, price) {
     updateGame((g) => ({ ...g, company: { ...g.company, merchMenu: g.company.merchMenu.map((e) => (e.itemId === itemId ? { ...e, price } : e)) } }));
@@ -3167,6 +3425,29 @@ export default function WrestlingGM() {
   }
   function removeMerchItem(itemId) {
     updateGame((g) => ({ ...g, company: { ...g.company, merchMenu: g.company.merchMenu.filter((e) => e.itemId !== itemId) } }));
+  }
+  function placeMerchOrder(itemId, qty) {
+    let outcome = 'none';
+    updateGame((g) => {
+      if (!canActToday(g.company)) { outcome = 'no_time'; return g; }
+      const item = MERCH_ITEMS_CATALOG.find((i) => i.id === itemId);
+      const roundedQty = Math.max(0, Math.round(qty));
+      if (!item || item.isAwareness || roundedQty <= 0) return g;
+      const cost = Math.round(item.baseCost * roundedQty);
+      if (g.company.funds < cost) { outcome = 'no_funds'; return g; }
+      outcome = 'ordered';
+      return tickOneDay({
+        ...g,
+        company: {
+          ...g.company,
+          funds: g.company.funds - cost,
+          merchMenu: g.company.merchMenu.map((e) => (e.itemId === itemId ? { ...e, stock: (e.stock || 0) + roundedQty } : e)),
+        },
+      });
+    });
+    if (outcome === 'no_time') showToast('No time left this week — run the show or wait for next week.');
+    else if (outcome === 'no_funds') showToast('Not enough funds for that order.');
+    else if (outcome === 'ordered') showToast('Order placed — stock is on hand for your next show.');
   }
 
   /* ---------- Weapons shopping ---------- */
@@ -3205,27 +3486,100 @@ export default function WrestlingGM() {
   }
 
   /* ---------- Staff actions ---------- */
-  function hireStaff(role, id) {
+  function hireStaff(role, id, termId = 'standard', bonusPct = 1, wagePct = 1, contractWeeks = 20) {
     const key = staffRoleKey(role);
+    let outcome = 'none';
     updateGame((g) => {
-      if (!canActToday(g.company)) { showToast('No time left this week to hire — run the show or wait for next week.'); return g; }
-      if (g.staff[key].length >= 3) { showToast(`You already have 3 ${role.toLowerCase()}s.`); return g; }
+      if (!canActToday(g.company)) { outcome = 'no_time'; return g; }
+      if (g.staff[key].length >= 3) { outcome = 'full'; return g; }
       const candidate = g.staffPool[key].find((s) => s.id === id);
       if (!candidate) return g;
-      const bonus = Math.round(candidate.salary * 1.5);
-      if (g.company.funds < bonus) { showToast('Not enough funds to hire.'); return g; }
+      const term = STAFF_CONTRACT_TERMS.find((t) => t.id === termId) || STAFF_CONTRACT_TERMS[0];
+      const bonus = Math.round(candidate.salary * 1.5 * term.bonusMult * bonusPct);
+      if (g.company.funds < bonus) { outcome = 'no_funds'; return g; }
+      const weeklyWage = Math.round(candidate.salary * wagePct);
+      const offerQuality = (bonusPct + wagePct) / 2;
+      const fit = negotiationFit(candidate.character, term.id, offerQuality, g.company.reputation, contractWeeks, candidate.storyline);
+      if (Math.random() < negotiationRejectionChance(fit)) {
+        outcome = 'rejected';
+        return tickOneDay({ ...g, news: [negotiationRejectionReason(candidate, term.id), ...g.news].slice(0, 30) });
+      }
+      let deadlineWeek = g.company.week + term.promiseWeeks;
+      let deadlineYear = g.company.year;
+      while (deadlineWeek > 52) { deadlineWeek -= 52; deadlineYear += 1; }
+      const contractPromise = term.promiseType ? { type: term.promiseType, deadlineWeek, deadlineYear } : null;
+      const termStoryline = term.id === 'job_security' ? ` Negotiated a job security clause.` : '';
+      outcome = 'hired';
       return tickOneDay({
         ...g,
         company: { ...g.company, funds: g.company.funds - bonus },
-        staff: { ...g.staff, [key]: [...g.staff[key], candidate] },
+        staff: { ...g.staff, [key]: [...g.staff[key], { ...candidate, salary: weeklyWage, contractWeeksLeft: contractWeeks, contractPromise, storyline: [...(candidate.storyline || []), { week: g.company.week, year: g.company.year, text: `Hired on with ${g.company.name}.${termStoryline}`, importance: 6, valence: 1, type: 'signing' }].slice(-30) }] },
         staffPool: { ...g.staffPool, [key]: [...g.staffPool[key].filter((s) => s.id !== id), generateStaff(role)] },
       });
     });
+    if (outcome === 'no_time') showToast('No time left this week to hire — run the show or wait for next week.');
+    else if (outcome === 'full') showToast(`You already have 3 ${role.toLowerCase()}s.`);
+    else if (outcome === 'no_funds') showToast('Not enough funds to hire.');
+    else if (outcome === 'rejected') showToast('They turned down the offer.');
+    else if (outcome === 'hired') showToast(`${role} hired.`);
   }
   function fireStaff(role, id) {
     const key = staffRoleKey(role);
-    updateGame((g) => ({ ...g, company: { ...g.company, bossReputation: bumpBossRep(g, -1) }, staff: { ...g.staff, [key]: g.staff[key].filter((s) => s.id !== id) } }));
+    updateGame((g) => {
+      const s = g.staff[key].find((x) => x.id === id);
+      const hasActiveJobSecurity = s && s.contractPromise && s.contractPromise.type === 'job_security' &&
+        !(g.company.year > s.contractPromise.deadlineYear || (g.company.year === s.contractPromise.deadlineYear && g.company.week > s.contractPromise.deadlineWeek));
+      return { ...g, company: { ...g.company, bossReputation: bumpBossRep(g, hasActiveJobSecurity ? -8 : -1) }, staff: { ...g.staff, [key]: g.staff[key].filter((x) => x.id !== id) } };
+    });
     showToast(`${role} let go.`);
+  }
+  function renewStaffContract(role, id) {
+    const key = staffRoleKey(role);
+    updateGame((g) => {
+      if (!canActToday(g.company)) { showToast('No time left this week — run the show or wait for next week.'); return g; }
+      const s = g.staff[key].find((x) => x.id === id);
+      if (!s) return g;
+      const bonus = Math.round(s.salary);
+      if (g.company.funds < bonus) { showToast('Not enough funds to renew.'); return g; }
+      const timesRenewed = (s.timesRenewed || 0) + 1;
+      const raisePct = timesRenewed >= 3 ? randInt(3, 14) : randInt(5, 20);
+      return tickOneDay({
+        ...g,
+        company: { ...g.company, funds: g.company.funds - bonus, bossReputation: bumpBossRep(g, 1) },
+        staff: {
+          ...g.staff,
+          [key]: g.staff[key].map((x) => (x.id === id ? {
+            ...x,
+            contractWeeksLeft: randInt(15, 30),
+            salary: Math.round(x.salary * (1 + raisePct / 100)),
+            timesRenewed,
+            storyline: [...(x.storyline || []), { week: g.company.week, year: g.company.year, text: 'Signed on for another run.', importance: timesRenewed >= 3 ? 6 : 4, valence: 1, type: 'loyalty' }].slice(-30),
+          } : x)),
+        },
+      });
+    });
+    showToast('Contract renewed.');
+  }
+  // Progression: skill points bank up from leveling and spend immediately, free — this is
+  // character development, not a business action, so it doesn't consume a day.
+  function spendWrestlerSkillPoint(id, statKey) {
+    updateGame((g) => {
+      const w = g.roster.find((r) => r.id === id);
+      if (!w || (w.skillPoints || 0) <= 0 || !WRESTLER_STAT_KEYS.includes(statKey)) return g;
+      const stats = { ...w.stats, [statKey]: clamp((w.stats[statKey] || 50) + 3, 1, 99) };
+      return { ...g, roster: g.roster.map((r) => (r.id === id ? { ...r, stats, skillPoints: r.skillPoints - 1 } : r)) };
+    });
+  }
+  function spendStaffSkillPoint(role, id, statKey) {
+    const key = staffRoleKey(role);
+    updateGame((g) => {
+      const s = g.staff[key].find((x) => x.id === id);
+      const validKeys = STAFF_ROLE_STATS[role] || [];
+      if (!s || (s.skillPoints || 0) <= 0 || !validKeys.includes(statKey)) return g;
+      const stats = { ...s.stats, [statKey]: clamp((s.stats[statKey] || 50) + 3, 1, 99) };
+      const quality = staffQualityFromStats(stats);
+      return { ...g, staff: { ...g.staff, [key]: g.staff[key].map((x) => (x.id === id ? { ...x, stats, quality, skillPoints: x.skillPoints - 1 } : x)) } };
+    });
   }
   function repairRing() {
     updateGame((g) => {
@@ -3267,8 +3621,28 @@ export default function WrestlingGM() {
   function updateDraft(patch) {
     updateGame((g) => ({ ...g, draftShow: { ...g.draftShow, ...patch } }));
   }
+  function updateTheme(theme) {
+    updateGame((g) => ({ ...g, company: { ...g.company, theme } }));
+  }
   function addCardItem(item) {
     updateGame((g) => ({ ...g, draftShow: { ...g.draftShow, card: [...g.draftShow.card, item] } }));
+  }
+  function updateCardItem(index, item) {
+    updateGame((g) => ({ ...g, draftShow: { ...g.draftShow, card: g.draftShow.card.map((c, i) => (i === index ? item : c)) } }));
+  }
+  function editCardItem(index) {
+    const item = game.draftShow.card[index];
+    if (!item) return;
+    setEditCardIndex(index);
+    if (item.kind === 'match') setMatchBuilderOpen(true);
+    else setPromoBuilderOpen(true);
+  }
+  function submitCardItem(item) {
+    if (editCardIndex !== null) updateCardItem(editCardIndex, item);
+    else addCardItem(item);
+    setEditCardIndex(null);
+    setMatchBuilderOpen(false);
+    setPromoBuilderOpen(false);
   }
   function removeCardItem(index) {
     updateGame((g) => ({ ...g, draftShow: { ...g.draftShow, card: g.draftShow.card.filter((_, i) => i !== index) } }));
@@ -3324,7 +3698,7 @@ export default function WrestlingGM() {
   function endWeekWithoutShow() {
     updateGame((g) => {
       const staffAll = [...g.staff.announcers, ...g.staff.commentators, ...(g.staff.referees || []), ...(g.staff.writers || []), ...(g.staff.roadAgents || [])];
-      const payroll = sum(g.roster.map((w) => w.salary)) + sum(staffAll.map((s) => s.salary));
+      const payroll = sum(g.roster.map((w) => effectiveWrestlerSalary(w))) + sum(staffAll.map((s) => s.salary));
       let nextWeek = g.company.week + 1; let nextYear = g.company.year;
       if (nextWeek > 52) { nextWeek = 1; nextYear += 1; }
       let partner = g.partner;
@@ -3357,23 +3731,60 @@ export default function WrestlingGM() {
     addDevLog('finance', `fillRate=${(result.fillRate * 100).toFixed(1)}% attendance=${result.attendance}/${result.venue.capacity} venue=${result.venue.name}${result.venue.crowdLean ? ` (${result.venue.crowdLean} crowd, company style=${game.company.style})` : ''}`);
     addDevLog('reputation', `repDelta=${result.repDelta} from avgStars=${result.avgStars.toFixed(2)} fillRate=${(result.fillRate * 100).toFixed(1)}% avgPromoPop=${Math.round(result.avgPromoPop)}${result.crowdVerdict ? ` crowdVerdict=${result.crowdVerdict}` : ''}`);
 
-    result.matchResults.forEach((m) => {
+    // Whether pushing a Jobber/Rookie into the main event was a real overreach or the honest
+    // best option a young, cash-strapped promotion actually had. An upstart with nobody
+    // Mid-Card or better on the roster isn't being reckless by headlining with what they've
+    // got — that's every early promotion's reality, and it shouldn't be punished the same way
+    // as sidelining a Star you already have in favor of an unready rookie.
+    const hasBetterMainEventOption = game.roster.some((r) => (CARD_TIER_RANK[r.tier] ?? 2) >= 2);
+
+    result.matchResults.forEach((m, matchIdx) => {
+      const isMainEvent = matchIdx === result.matchResults.length - 1;
+      const matchXp = 10 + Math.round(m.result.finalStars * 6) + (isMainEvent ? 8 : 0) + (m.titleId ? 12 : 0) + (m.feudBlowOffId ? 10 : 0);
       m.participantIds.forEach((pid) => {
         const w = game.roster.find((r) => r.id === pid);
         const perf = m.result.perfTracker[pid] || { points: 0 };
         const isWinner = m.winnerIds.includes(pid);
         let popGain = Math.round(2 + perf.points * 4 + (isWinner ? 3 : 0) + m.result.finalStars * 1.5);
         if (hasTrait(w, 'natural')) popGain = Math.round(popGain * 1.3);
-        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0 };
+        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0, xpGain: 0 };
+        // Overpushed: a real gamble, not a guaranteed punishment. Confidence and risk
+        // tolerance (Character Core) decide whether they rise to the occasion or crack —
+        // and a genuine trial-by-fire (no better option existed) softens the downside and
+        // sweetens the odds, since there's a real underdog story in that, not recklessness.
+        const tierRank = CARD_TIER_RANK[w ? w.tier : 'Mid-Card'] ?? 2;
+        if (isMainEvent && tierRank <= 1) {
+          const necessity = !hasBetterMainEventOption;
+          const riskTolerance = (w && w.character && w.character.dimensions && w.character.dimensions.riskTolerance) || 50;
+          const riseChance = clamp(0.15 + (w ? w.confidence || 50 : 50) / 250 + riskTolerance / 400 + (necessity ? 0.2 : 0) - (tierRank === 0 ? 0.1 : 0), 0.05, 0.85);
+          if (Math.random() < riseChance) {
+            popGain = Math.round(popGain * 1.5);
+            wrestlerUpdates[pid].confGain += 8;
+            wrestlerUpdates[pid].moraleDelta += 6;
+            addStoryline(pid, necessity
+              ? `Thrown into the main event out of necessity — and rose to the occasion in a real breakout moment.`
+              : `Got an unexpected chance at the top of the card and made the absolute most of it.`, 8, 1, 'general');
+          } else {
+            const severity = (tierRank === 0 ? 1 : 0.55) * (necessity ? 0.4 : 1);
+            popGain = Math.round(popGain * (1 - 0.35 * severity));
+            wrestlerUpdates[pid].confGain -= Math.round(10 * severity);
+            wrestlerUpdates[pid].moraleDelta -= Math.round(6 * severity);
+            addStoryline(pid, necessity
+              ? `Understandably shaky headlining a show they were thrown into before they were ready — the company just didn't have anyone else.`
+              : `Looked like a nervous wreck headlining a show — completely out of their depth on that spot.`, 7, -1, 'general');
+          }
+        }
         wrestlerUpdates[pid].popDelta += popGain;
         wrestlerUpdates[pid].matchInc += 1;
         wrestlerUpdates[pid].confGain += isWinner ? 2.5 : 1;
+        wrestlerUpdates[pid].xpGain += matchXp;
+        if (isMainEvent) wrestlerUpdates[pid].mainEventedThisWeek = true;
         let moraleDelta = isWinner ? 4 : (m.result.finalStars >= 3 ? 1 : -3);
         if (!isWinner && hasTrait(w, 'prima_donna')) moraleDelta -= 3;
         wrestlerUpdates[pid].moraleDelta += moraleDelta;
       });
       m.result.injuries.forEach((inj) => {
-        if (!wrestlerUpdates[inj.wrestlerId]) wrestlerUpdates[inj.wrestlerId] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0 };
+        if (!wrestlerUpdates[inj.wrestlerId]) wrestlerUpdates[inj.wrestlerId] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0, xpGain: 0 };
         const injuredWrestler = game.roster.find((r) => r.id === inj.wrestlerId);
         const healMult = currentTier(game.company, 'medical').healMult * (hasTrait(injuredWrestler, 'iron_constitution') ? 0.6 : 1);
         const weeksLeft = Math.max(1, Math.round(inj.weeksLeft * healMult));
@@ -3382,14 +3793,16 @@ export default function WrestlingGM() {
       });
     });
     result.promoResults.forEach((p) => {
+      const promoXp = 6 + (p.storyBeatId ? 8 : 0) + (p.feudId ? 5 : 0);
       p.participantIds.forEach((pid) => {
-        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0 };
+        if (!wrestlerUpdates[pid]) wrestlerUpdates[pid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0, xpGain: 0 };
         wrestlerUpdates[pid].popDelta += Math.round(p.pop / 12);
         wrestlerUpdates[pid].moraleDelta += 1;
+        wrestlerUpdates[pid].xpGain += promoXp;
       });
     });
     Object.entries(result.merchRoyalties || {}).forEach(([wid, amount]) => {
-      if (!wrestlerUpdates[wid]) wrestlerUpdates[wid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0 };
+      if (!wrestlerUpdates[wid]) wrestlerUpdates[wid] = { popDelta: 0, moraleDelta: 0, matchInc: 0, merchEarned: 0, confGain: 0, xpGain: 0 };
       wrestlerUpdates[wid].moraleDelta += clamp(Math.round(amount / 150), 0, 5);
       wrestlerUpdates[wid].merchEarned += amount;
     });
@@ -3406,6 +3819,13 @@ export default function WrestlingGM() {
     // the young roster instead of just being a quality stat — legacy through people, not just numbers.
     const mentorsOnStaff = [...(game.staff.roadAgents || []), ...(game.staff.writers || []), ...(game.staff.announcers || [])].filter((s) => s.formerWrestler);
     const hasMentor = mentorsOnStaff.length > 0;
+
+    // Venue graduation: the first show run at a real (non-private) venue takes the company
+    // off informal/backyard pay for good. Anyone still on informalPay converts to their full
+    // listed salary this week, with a morale bump and a storyline entry marking the moment.
+    const justGraduated = !game.company.venueGraduated && !result.venue.private;
+    const levelUpNews = [];
+    const heldBackNews = [];
 
     const updatedRoster = game.roster.map((w) => {
       const upd = wrestlerUpdates[w.id];
@@ -3424,6 +3844,7 @@ export default function WrestlingGM() {
       const matchedThisWeek = !!(upd && upd.matchInc);
       const justRecovered = wasInjured && !injury && !newInjury;
       const mentorBoost = hasMentor && (w.tier === 'Jobber' || w.tier === 'Rookie') && Math.random() < 0.3 ? 1 : 0;
+      const graduating = justGraduated && w.informalPay;
       const confidence = clamp((w.confidence || 50) + (upd ? upd.confGain || 0 : 0) - (justRecovered ? 15 : 0) + mentorBoost, 5, 100);
       // A recent, significant personal memory lingers a little rather than resetting to
       // neutral every week — small and bounded, not a permanent stat lock (Phase 6).
@@ -3431,15 +3852,38 @@ export default function WrestlingGM() {
       const memoryDrift = topMemory && (topMemory.importance || 0) >= 7 && weeksBetween(topMemory.week, topMemory.year, game.company.week, game.company.year) <= 6
         ? (topMemory.valence > 0 ? 1 : topMemory.valence < 0 ? -1 : 0)
         : 0;
+      // Progression (Phase 8 follow-up): XP from matches/promos this week plus a small passive
+      // trickle for anyone currently holding a title, then resolved into levels/skill points.
+      // Traits are untouched by leveling — they're still assigned/evolved exactly as before;
+      // this is a pure stat-allocation layer on top.
+      const titleHolderXp = (game.titles || []).some((t) => t.holderIds && t.holderIds.includes(w.id)) ? 4 : 0;
+      const prog = applyXpGain(w, (upd ? upd.xpGain || 0 : 0) + titleHolderXp);
+      if (prog.milestonesHit.length > 0) {
+        levelUpNews.push(`${w.name} hit Level ${prog.milestonesHit[prog.milestonesHit.length - 1]} — a bonus skill point to spend.`);
+      }
+      // Held back: a Star/Legend who's clearly earned the top of the card but isn't getting
+      // it grows genuinely resentful the longer it drags on — not just a flavor number, a real
+      // morale drain, with a one-time storyline beat when the frustration actually boils over.
+      const mainEventedThisWeek = !!(upd && upd.mainEventedThisWeek);
+      const weeksSinceMainEvent = mainEventedThisWeek ? 0 : (w.weeksSinceMainEvent || 0) + 1;
+      const isHeldBack = (w.tier === 'Star' || w.tier === 'Legend') && weeksSinceMainEvent >= WEEKS_HELD_BACK_THRESHOLD;
+      const heldBackMoraleHit = isHeldBack ? -3 : 0;
+      if (weeksSinceMainEvent === WEEKS_HELD_BACK_THRESHOLD) {
+        heldBackNews.push(`${w.name} is growing frustrated at being kept off the top of the card despite clearly having earned it.`);
+        addStoryline(w.id, `Grew visibly frustrated at being held off the main event despite having earned it.`, 7, -1, 'general');
+      }
       return {
         ...w,
+        informalPay: graduating ? false : w.informalPay,
         popularity: clamp(w.popularity + (upd ? upd.popDelta : 0), 0, 100),
-        morale: clamp(w.morale + (upd ? upd.moraleDelta : 0) + passiveMorale + memoryDrift - (contractWeeksLeft === 0 ? 5 : 0), 0, 100),
+        morale: clamp(w.morale + (upd ? upd.moraleDelta : 0) + passiveMorale + memoryDrift + heldBackMoraleHit + (graduating ? 6 : 0) - (contractWeeksLeft === 0 ? 5 : 0), 0, 100),
         condition, injury, contractWeeksLeft, confidence,
+        storyline: graduating ? [...(w.storyline || []), { week: game.company.week, year: game.company.year, text: `The promotion went legit — real pay from here on out.`, importance: 6, valence: 1, type: 'financial' }].slice(-30) : w.storyline,
         matchesWrestled: w.matchesWrestled + (upd ? upd.matchInc || 0 : 0),
         merchEarnings: w.merchEarnings + (upd ? upd.merchEarned || 0 : 0),
         careerInjuries: (w.careerInjuries || 0) + (newInjury ? 1 : 0),
         matchesSinceInjury: newInjury ? 0 : (matchedThisWeek ? (w.matchesSinceInjury || 0) + 1 : (w.matchesSinceInjury || 0)),
+        xp: prog.xp, level: prog.level, skillPoints: prog.skillPoints, weeksSinceMainEvent,
       };
     });
 
@@ -3461,7 +3905,7 @@ export default function WrestlingGM() {
         const transitionChance = clamp(0.25 + (w.tier === 'Star' || w.tier === 'Legend' ? 0.25 : 0) + ((w.character && w.character.needs.includes('purpose')) ? 0.1 : 0) + ((w.character && w.character.needs.includes('legacy')) ? 0.15 : 0), 0.15, 0.7);
         if (Math.random() < transitionChance) {
           const role = pick(['Road Agent', 'Road Agent', 'Writer', 'Announcer']);
-          transitionedStaff.push(wrestlerToStaffMember(w, role));
+          transitionedStaff.push(wrestlerToStaffMember(w, role, game.company.week, game.company.year));
           retirementNews.push(`${w.name} (${w.age}) has retired from the ring — staying on as a ${role}, passing on what they know.`);
           retirementWorldEvents.push({ type: 'retirement', week: game.company.week, year: game.company.year, targetName: w.name, text: `${w.name} retired from wrestling and stayed on as a ${role}.` });
         } else {
@@ -3727,13 +4171,25 @@ export default function WrestlingGM() {
       const fulfilled = checkWrestlerAmbitionFulfilled(w, amb, ambitionCtx);
       const { ambition: nextAmb, news } = tickAmbition(w, amb, fulfilled, WRESTLER_AMBITIONS, stillRoster);
       if (news) { ambitionNews.push(news); addStoryline(w.id, news, 6, /granted|fulfilled|satisfied/i.test(news) ? 1 : -1, 'ambition'); }
-      if (nextAmb.satisfaction <= 0) {
+      let finalAmb = nextAmb;
+      // Communication cuts both ways: an unhappy wrestler complains through the existing
+      // path above, but a confident underdog with the ambition to match can proactively ask
+      // for a chance instead of just waiting to be noticed — same pendingRequest surface,
+      // just a different, positive reason for showing up in it.
+      if (!finalAmb.pendingRequest && finalAmb.status === 'content' && amb.type === 'main_event' &&
+          (w.tier === 'Jobber' || w.tier === 'Rookie') && (w.confidence || 0) >= 70 &&
+          ((w.character && w.character.dimensions && w.character.dimensions.riskTolerance) || 0) >= 60 &&
+          (finalAmb.contentStreak || 0) >= 4 && Math.random() < 0.08) {
+        finalAmb = { ...finalAmb, pendingRequest: { text: `Thinks they're ready for a shot in the main event and wants you to consider it.` } };
+        ambitionNews.push(`${w.name} has asked for a shot in the main event — they think they're ready.`);
+      }
+      if (finalAmb.satisfaction <= 0) {
         departingIds.add(w.id);
         bossRepFromDepartures -= 1;
         const rival = game.rivals.length ? pick(game.rivals) : null;
         ambitionNews.push(rival ? `${w.name} has left ${game.company.name} to sign with ${rival.name}, citing unmet ambitions.` : `${w.name} has walked out on ${game.company.name}, citing unmet ambitions.`);
       }
-      return { ...w, ambition: nextAmb };
+      return { ...w, ambition: finalAmb };
     });
     let nextRivalsWithSignings = nextRivals;
     if (departingIds.size) {
@@ -3841,19 +4297,55 @@ export default function WrestlingGM() {
     }
 
     const staffAmbitionNews = [];
-    function tickStaffGroup(list) {
-      return list.map((s) => {
+    const staffContractNews = [];
+    const staffExpiredByKey = { announcers: [], commentators: [], referees: [], writers: [], roadAgents: [] };
+    function tickStaffGroup(list, roleKey) {
+      const staying = [];
+      list.forEach((s) => {
         const amb = s.ambition || assignStaffAmbition();
         const fulfilled = checkStaffAmbitionFulfilled(s, amb, ambitionCtx);
         const { ambition: nextAmb, news } = tickAmbition(s, amb, fulfilled, STAFF_AMBITIONS, null);
         if (news) staffAmbitionNews.push(news);
-        const withTenure = { ...s, ambition: nextAmb, weeksEmployed: s.weeksEmployed + 1 };
+        let withTenure = { ...s, ambition: nextAmb, weeksEmployed: s.weeksEmployed + 1 };
         const { trait, news: traitNews } = evolveStaffTrait(withTenure);
         traitNews.forEach((n) => traitEvolutionNews.push(n));
-        return { ...withTenure, trait };
+        withTenure = { ...withTenure, trait };
+        // Job security promise resolution — same generic checker wrestlers use; staff only
+        // ever carry the 'job_security' promise type, so the title-holder branch never fires.
+        const promiseResult = checkContractPromise(withTenure, {}, game.company.week, game.company.year);
+        if (promiseResult.news) staffContractNews.push(promiseResult.news);
+        withTenure = { ...withTenure, contractPromise: promiseResult.contractPromise };
+        const contractWeeksLeft = Math.max(0, (withTenure.contractWeeksLeft !== undefined && withTenure.contractWeeksLeft !== null ? withTenure.contractWeeksLeft : 20) - 1);
+        withTenure = { ...withTenure, contractWeeksLeft };
+        // Progression (Phase 8 follow-up): staff earn XP whenever any show runs, scaled to
+        // that show's quality — their contribution is ambient, not attributable to one match.
+        // Traits are untouched by leveling, same as wrestlers — pure stat allocation, spendable
+        // on whichever of their 3 role stats the player wants to invest in.
+        const staffShowXp = 8 + Math.round(result.avgStars * 4);
+        const progS = applyXpGain(withTenure, staffShowXp);
+        if (progS.milestonesHit.length > 0) {
+          staffContractNews.push(`${withTenure.name} hit Level ${progS.milestonesHit[progS.milestonesHit.length - 1]} as a ${withTenure.role.toLowerCase()} — a bonus skill point to spend.`);
+        }
+        withTenure = { ...withTenure, xp: progS.xp, level: progS.level, skillPoints: progS.skillPoints };
+        if (contractWeeksLeft === 0) {
+          staffContractNews.push(`${withTenure.name}'s contract as ${withTenure.role.toLowerCase()} expired and hit the open market.`);
+          staffExpiredByKey[roleKey].push({ ...withTenure, contractWeeksLeft: null, contractPromise: null, storyline: [...(withTenure.storyline || []), { week: game.company.week, year: game.company.year, text: `Contract expired with ${game.company.name}.`, importance: 5, valence: -1, type: 'financial' }].slice(-30) });
+        } else {
+          staying.push(withTenure);
+        }
       });
+      return staying;
     }
-    const nextStaff = { announcers: tickStaffGroup(game.staff.announcers), commentators: tickStaffGroup(game.staff.commentators), referees: tickStaffGroup(game.staff.referees || []), writers: tickStaffGroup(game.staff.writers || []), roadAgents: tickStaffGroup(game.staff.roadAgents || []) };
+    const nextStaff = {
+      announcers: tickStaffGroup(game.staff.announcers, 'announcers'),
+      commentators: tickStaffGroup(game.staff.commentators, 'commentators'),
+      referees: tickStaffGroup(game.staff.referees || [], 'referees'),
+      writers: tickStaffGroup(game.staff.writers || [], 'writers'),
+      roadAgents: tickStaffGroup(game.staff.roadAgents || [], 'roadAgents'),
+    };
+    Object.entries(staffExpiredByKey).forEach(([key, list]) => {
+      if (list.length) nextStaffPool = { ...nextStaffPool, [key]: [...(nextStaffPool[key] || []), ...list] };
+    });
 
     if (departingIds.size) {
       nextTagTeams = nextTagTeams.filter((t) => t.memberIds.every((id) => !departingIds.has(id)));
@@ -3878,11 +4370,15 @@ export default function WrestlingGM() {
     rivalNews.forEach((n) => newsEntries.push(n));
     ambitionNews.forEach((n) => newsEntries.push(n));
     staffAmbitionNews.forEach((n) => newsEntries.push(n));
+    staffContractNews.forEach((n) => newsEntries.push(n));
+    levelUpNews.forEach((n) => newsEntries.push(n));
+    heldBackNews.forEach((n) => newsEntries.push(n));
     traitEvolutionNews.forEach((n) => newsEntries.push(n));
     wellnessNews.forEach((n) => newsEntries.push(n));
     tierNews.forEach((n) => newsEntries.push(n));
     relationshipNews.forEach((n) => newsEntries.push(n));
     newsEntries.push(result.netProfit >= 0 ? `The show turned a profit of ${money(result.netProfit)}.` : `The show lost ${money(Math.abs(result.netProfit))}.`);
+    if (justGraduated) newsEntries.push(`First real show off the backyard, in the books. Everyone still working informal terms just got put on real pay for good.`);
 
     let nextPartner = game.partner;
     if (nextPartner && nextPartner.relationship) {
@@ -3955,6 +4451,22 @@ export default function WrestlingGM() {
     const nextSupplies = clamp((game.company.supplies !== undefined ? game.company.supplies : 100) - suppliesUsed, 0, 100);
     if (nextRingCondition <= 25) newsEntries.push('The ring is showing serious wear — worth repairing before it becomes a safety issue.');
     if (nextSupplies <= 25) newsEntries.push('Concessions, merch, and weapons stock are running low — time to restock.');
+    if (result.merchSoldOutItemIds && result.merchSoldOutItemIds.length > 0) {
+      const soldOutNames = result.merchSoldOutItemIds.map((id) => (MERCH_ITEMS_CATALOG.find((i) => i.id === id) || {}).name).filter(Boolean).join(', ');
+      if (soldOutNames) newsEntries.push(`Sold out of ${soldOutNames} before the crowd went home — place another order if you want more on hand next time.`);
+    }
+    if (result.concessionsSoldOutItemIds && result.concessionsSoldOutItemIds.length > 0) {
+      const soldOutNames = result.concessionsSoldOutItemIds.map((id) => (CONCESSION_ITEMS_CATALOG.find((i) => i.id === id) || {}).name).filter(Boolean).join(', ');
+      if (soldOutNames) newsEntries.push(`The stands ran out of ${soldOutNames} — the crowd was hungrier than you ordered for.`);
+    }
+    const wastedTotal = result.concessionsWasted ? sum(Object.values(result.concessionsWasted)) : 0;
+    if (wastedTotal >= 40) newsEntries.push(`A lot of concessions went unsold and got tossed tonight — the crowd wasn't as hungry as you'd stocked for.`);
+    const nextMerchMenu = game.company.merchMenu.map((e) => {
+      const sold = (result.merchQtySold && result.merchQtySold[e.itemId]) || 0;
+      const item = MERCH_ITEMS_CATALOG.find((i) => i.id === e.itemId);
+      if (!item || item.isAwareness) return e;
+      return { ...e, stock: Math.max(0, (e.stock || 0) - sold) };
+    });
 
     const nextGame = {
       ...game,
@@ -3971,6 +4483,8 @@ export default function WrestlingGM() {
         supplies: nextSupplies,
         tvDeal,
         matchResearch,
+        venueGraduated: justGraduated ? true : game.company.venueGraduated,
+        merchMenu: nextMerchMenu,
       },
       roster: stillRoster,
       freeAgents,
@@ -4270,7 +4784,7 @@ export default function WrestlingGM() {
   // Financial stress (Phase 8): when funds can't cover roughly two weeks of payroll, the
   // "ask for a pay cut" option becomes available — a real business-vs-relationship tradeoff
   // that only exists because money is genuinely tight, not a tool available anytime.
-  const weeklyPayrollAll = sum(roster.map((w) => w.salary)) + sum([...staff.announcers, ...staff.commentators, ...(staff.referees || []), ...(staff.writers || []), ...(staff.roadAgents || [])].map((s) => s.salary));
+  const weeklyPayrollAll = sum(roster.map((w) => effectiveWrestlerSalary(w))) + sum([...staff.announcers, ...staff.commentators, ...(staff.referees || []), ...(staff.writers || []), ...(staff.roadAgents || [])].map((s) => s.salary));
   const financialStress = company.funds < weeklyPayrollAll * 2;
 
   const TABS = [
@@ -4296,6 +4810,9 @@ export default function WrestlingGM() {
           </div>
           <div className="text-right">
             <div className="flex items-center justify-end gap-2">
+              <button onClick={() => setThemeEditorOpen(true)} className="opacity-40" aria-label="Company colors">
+                <Palette size={12} color="rgba(246,240,225,0.6)" />
+              </button>
               <button onClick={() => setDevLogModalOpen(true)} className="opacity-40" aria-label="Developer log">
                 <Bug size={12} color="rgba(246,240,225,0.6)" />
               </button>
@@ -4337,7 +4854,7 @@ export default function WrestlingGM() {
             roster={roster} staff={staff} titles={titles} tagTeams={tagTeams} stables={stables} feuds={feuds} relationships={relationships} funds={company.funds}
             subTab={rosterSubTab} setSubTab={setRosterSubTab}
             onSelect={setSelectedWrestler}
-            onFireStaff={(role, id) => setConfirmAction({ type: 'fireStaff', role, id })} onRaiseStaff={giveStaffRaise}
+            onFireStaff={(role, id) => setConfirmAction({ type: 'fireStaff', role, id })} onRaiseStaff={giveStaffRaise} onRenewStaff={renewStaffContract} onSpendStaffSkillPoint={spendStaffSkillPoint}
             onOpenTeamBuilder={() => setTeamBuilderOpen(true)} onDisbandTeam={disbandTeam}
             onOpenStableBuilder={() => setStableBuilderOpen(true)} onSelectStable={setSelectedStable}
             onOpenFeudBuilder={() => setFeudBuilderOpen(true)} onSelectFeud={setSelectedFeud}
@@ -4360,7 +4877,7 @@ export default function WrestlingGM() {
             onPurchaseUpgrade={purchaseUpgrade}
             onPurchaseRingShape={purchaseRingShape} onEquipRingShape={equipRingShape}
             onAddConcession={addConcessionItem} onSetConcessionPrice={setConcessionPrice} onRemoveConcession={removeConcessionItem}
-            onAddMerch={addMerchItem} onSetMerchPrice={setMerchPrice} onSetMerchWrestler={toggleMerchWrestler} onSetMerchAllocation={setMerchAllocation} onRemoveMerch={removeMerchItem}
+            onAddMerch={addMerchItem} onSetMerchPrice={setMerchPrice} onSetMerchWrestler={toggleMerchWrestler} onSetMerchAllocation={setMerchAllocation} onRemoveMerch={removeMerchItem} onPlaceMerchOrder={placeMerchOrder}
             onPurchaseWeaponItem={purchaseWeaponItem} onStartResearch={startMatchResearch}
             onSignTv={signTVDeal}
           />
@@ -4369,8 +4886,9 @@ export default function WrestlingGM() {
           <BookShowTab
             draftShow={draftShow} draftVenue={draftVenue} unlocked={unlocked} estimate={estimate}
             roster={roster} healthyRoster={healthyRoster} titles={titles} feuds={feuds} funds={company.funds} company={company}
-            onUpdateDraft={updateDraft} onOpenMatchBuilder={() => setMatchBuilderOpen(true)}
-            onOpenPromoBuilder={() => setPromoBuilderOpen(true)} onRemove={removeCardItem} onMove={moveCardItem}
+            onUpdateDraft={updateDraft} onOpenMatchBuilder={() => { setEditCardIndex(null); setMatchBuilderOpen(true); }}
+            onOpenPromoBuilder={() => { setEditCardIndex(null); setPromoBuilderOpen(true); }} onRemove={removeCardItem} onMove={moveCardItem}
+            onEdit={editCardItem}
             onRun={runShow}
             onEndWeekWithoutShow={endWeekWithoutShow}
             onRepairRing={repairRing} onRestockSupplies={restockSupplies} onSkipDay={skipDay} onSkipToShowDay={skipToShowDay}
@@ -4405,7 +4923,7 @@ export default function WrestlingGM() {
           wrestler={roster.find((r) => r.id === selectedWrestler.id) || selectedWrestler} titles={titles} tagTeams={tagTeams} stables={stables} relationships={relationships} onClose={() => setSelectedWrestler(null)}
           onAlign={setAlignment} onRelease={(id) => setConfirmAction({ type: 'release', id })}
           onRenew={renewContract} onGrantRequest={grantAmbitionRequest} onSendToWellness={sendToWellnessProgram} funds={company.funds}
-          onRequestPayCut={requestPayCut} financialStress={financialStress}
+          onRequestPayCut={requestPayCut} financialStress={financialStress} onSpendSkillPoint={spendWrestlerSkillPoint}
         />
       )}
 
@@ -4416,6 +4934,7 @@ export default function WrestlingGM() {
           onClose={() => setSelectedFreeAgent(null)}
           onSign={(id, termId, bonusPct, wagePct, contractWeeks) => { signFreeAgent(id, termId, bonusPct, wagePct, contractWeeks); setSelectedFreeAgent(null); }}
           funds={company.funds} bossReputation={company.bossReputation} reputation={company.reputation}
+          venueGraduated={company.venueGraduated}
         />
       )}
 
@@ -4424,16 +4943,18 @@ export default function WrestlingGM() {
         <FreeStaffModal
           staffMember={selectedFreeStaff}
           onClose={() => setSelectedFreeStaff(null)}
-          onHire={(role, id) => { hireStaff(role, id); setSelectedFreeStaff(null); }}
-          funds={company.funds}
+          onHire={(role, id, termId, bonusPct, wagePct, contractWeeks) => { hireStaff(role, id, termId, bonusPct, wagePct, contractWeeks); setSelectedFreeStaff(null); }}
+          funds={company.funds} reputation={company.reputation}
         />
       )}
 
       {/* Match builder */}
       {matchBuilderOpen && (
         <MatchBuilderModal
-          roster={healthyRoster} titles={titles} tagTeams={tagTeams} feuds={feuds} style={company.style} unlockedResearch={company.matchResearch.unlockedTypes} onClose={() => setMatchBuilderOpen(false)}
-          onAdd={(item) => { addCardItem(item); setMatchBuilderOpen(false); }}
+          roster={healthyRoster} titles={titles} tagTeams={tagTeams} feuds={feuds} style={company.style} unlockedResearch={company.matchResearch.unlockedTypes}
+          initial={editCardIndex !== null ? draftShow.card[editCardIndex] : null}
+          onClose={() => { setMatchBuilderOpen(false); setEditCardIndex(null); }}
+          onAdd={submitCardItem}
         />
       )}
 
@@ -4522,11 +5043,17 @@ export default function WrestlingGM() {
         <DevLogModal devLog={game.devLog || []} onClose={() => setDevLogModalOpen(false)} />
       )}
 
+      {themeEditorOpen && (
+        <ThemeEditorModal theme={company.theme} onClose={() => setThemeEditorOpen(false)} onSave={updateTheme} />
+      )}
+
       {/* Promo builder */}
       {promoBuilderOpen && (
         <PromoBuilderModal
-          roster={roster} staff={staff} feuds={feuds} writerTierLevel={writerTier(staff.writers)} onClose={() => setPromoBuilderOpen(false)}
-          onAdd={(item) => { addCardItem(item); setPromoBuilderOpen(false); }}
+          roster={roster} staff={staff} feuds={feuds} writerTierLevel={writerTier(staff.writers)}
+          initial={editCardIndex !== null ? draftShow.card[editCardIndex] : null}
+          onClose={() => { setPromoBuilderOpen(false); setEditCardIndex(null); }}
+          onAdd={submitCardItem}
         />
       )}
 
@@ -4563,7 +5090,7 @@ export default function WrestlingGM() {
 function DashboardTab({ game, news, draftShow, draftVenue, onGoBook, onNewGame, onOpenUpgrades, onOpenTv, onOpenRivals, onOpenMedia, onOpenInbox, onOpenPartner, onGoRoster, onGoFreeAgents, onGoHistory }) {
   const { company, roster } = game;
   const injured = roster.filter((w) => w.injury);
-  const needsTalk = roster.filter((w) => w.ambition && (w.ambition.status === 'unhappy' || w.ambition.status === 'holdout'));
+  const needsTalk = roster.filter((w) => w.ambition && (w.ambition.status === 'unhappy' || w.ambition.status === 'holdout' || w.ambition.pendingRequest));
   const avgPop = Math.round(average(roster.map((w) => w.popularity)));
   const regionLabel = (REGION_LIST.find((r) => r.id === company.region) || REGION_LIST[0]).label;
   const styleLabel = (STYLE_CONFIG[company.style] || STYLE_CONFIG.sports_entertainment).label;
@@ -4743,7 +5270,7 @@ function SectionTitleDark({ icon: Icon, children }) {
 /* ============================================================
    ROSTER TAB
    ============================================================ */
-function RosterTab({ roster, staff, titles, tagTeams, stables, feuds, relationships, funds, subTab, setSubTab, onSelect, onFireStaff, onRaiseStaff, onOpenTeamBuilder, onDisbandTeam, onOpenStableBuilder, onSelectStable, onOpenFeudBuilder, onSelectFeud, onOpenRelationshipBuilder, onEndRelationship }) {
+function RosterTab({ roster, staff, titles, tagTeams, stables, feuds, relationships, funds, subTab, setSubTab, onSelect, onFireStaff, onRaiseStaff, onRenewStaff, onSpendStaffSkillPoint, onOpenTeamBuilder, onDisbandTeam, onOpenStableBuilder, onSelectStable, onOpenFeudBuilder, onSelectFeud, onOpenRelationshipBuilder, onEndRelationship }) {
   const activeFeuds = feuds.filter((f) => f.status !== 'ended');
   const allStaff = [...staff.announcers, ...staff.commentators, ...(staff.referees || []), ...(staff.writers || []), ...(staff.roadAgents || [])];
   return (
@@ -4769,11 +5296,11 @@ function RosterTab({ roster, staff, titles, tagTeams, stables, feuds, relationsh
           <p className="wgm-mono text-[10px] mb-2 px-2 py-1 inline-block rounded" style={{ color: C.cream, backgroundColor: C.ink }}>STAFF ({allStaff.length})</p>
           <div className="space-y-2">
             {allStaff.length === 0 && <EmptyState text="No staff hired. Check the Free Agents tab to build your production team." />}
-            {staff.announcers.map((s) => <StaffRow key={s.id} s={s} role="Announcer" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} />)}
-            {staff.commentators.map((s) => <StaffRow key={s.id} s={s} role="Commentator" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} />)}
-            {(staff.referees || []).map((s) => <StaffRow key={s.id} s={s} role="Referee" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} />)}
-            {(staff.writers || []).map((s) => <StaffRow key={s.id} s={s} role="Writer" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} />)}
-            {(staff.roadAgents || []).map((s) => <StaffRow key={s.id} s={s} role="Road Agent" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} />)}
+            {staff.announcers.map((s) => <StaffRow key={s.id} s={s} role="Announcer" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} onRenew={onRenewStaff} onSpendSkillPoint={onSpendStaffSkillPoint} />)}
+            {staff.commentators.map((s) => <StaffRow key={s.id} s={s} role="Commentator" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} onRenew={onRenewStaff} onSpendSkillPoint={onSpendStaffSkillPoint} />)}
+            {(staff.referees || []).map((s) => <StaffRow key={s.id} s={s} role="Referee" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} onRenew={onRenewStaff} onSpendSkillPoint={onSpendStaffSkillPoint} />)}
+            {(staff.writers || []).map((s) => <StaffRow key={s.id} s={s} role="Writer" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} onRenew={onRenewStaff} onSpendSkillPoint={onSpendStaffSkillPoint} />)}
+            {(staff.roadAgents || []).map((s) => <StaffRow key={s.id} s={s} role="Road Agent" funds={funds} onFire={onFireStaff} onRaise={onRaiseStaff} onRenew={onRenewStaff} onSpendSkillPoint={onSpendStaffSkillPoint} />)}
           </div>
         </div>
       )}
@@ -5107,7 +5634,7 @@ function EmptyState({ text }) {
   return <div className="rounded-lg p-6 text-center text-xs" style={{ backgroundColor: C.canvasAlt, color: C.inkFaint }}>{text}</div>;
 }
 
-function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onClose, onAlign, onRelease, onRenew, onGrantRequest, onSendToWellness, onRequestPayCut, financialStress, funds }) {
+function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onClose, onAlign, onRelease, onRenew, onGrantRequest, onSendToWellness, onRequestPayCut, onSpendSkillPoint, financialStress, funds }) {
   const champTitles = championTitlesFor(titles, wrestler.id);
   const team = (tagTeams || []).find((t) => t.memberIds.includes(wrestler.id));
   const stable = (stables || []).find((s) => s.memberIds.includes(wrestler.id));
@@ -5244,6 +5771,28 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
         </div>
       )}
 
+      <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.canvasAlt }}>
+        <div className="flex items-center justify-between mb-1.5">
+          <p className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>DEVELOPMENT — LEVEL {wrestler.level || 1}</p>
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>{wrestler.xp || 0}/{xpToNextLevel(wrestler.level || 1)} XP</span>
+        </div>
+        <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: C.canvas }}>
+          <div className="h-full rounded-full" style={{ width: `${clamp(((wrestler.xp || 0) / xpToNextLevel(wrestler.level || 1)) * 100, 0, 100)}%`, backgroundColor: C.gold }} />
+        </div>
+        {(wrestler.skillPoints || 0) > 0 && onSpendSkillPoint && (
+          <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+            <p className="text-[11px] mb-1.5" style={{ color: C.ink }}>{wrestler.skillPoints} skill point{wrestler.skillPoints > 1 ? 's' : ''} to spend — pick a stat to grow:</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {WRESTLER_STAT_KEYS.map((k) => (
+                <button key={k} onClick={() => onSpendSkillPoint(wrestler.id, k)} className="rounded-md py-1.5 text-[10px] font-semibold uppercase" style={{ backgroundColor: C.gold, color: C.ink }}>
+                  +3 {k.slice(0, 4)}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="rounded-lg p-3 mb-4 space-y-2" style={{ backgroundColor: C.ink }}>
         <StatBar label="STR" value={wrestler.stats.strength} />
         <StatBar label="TECH" value={wrestler.stats.technical} />
@@ -5263,10 +5812,13 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
         </div>
       )}
 
-      <div className="flex items-center justify-between text-xs mb-4" style={{ color: C.inkFaint }}>
-        <span>Salary: <span className="wgm-mono" style={{ color: C.ink }}>{money(wrestler.salary)}/wk</span></span>
+      <div className={`flex items-center justify-between text-xs ${wrestler.informalPay ? 'mb-1' : 'mb-4'}`} style={{ color: C.inkFaint }}>
+        <span>{wrestler.informalPay ? 'Informal pay: ' : 'Salary: '}<span className="wgm-mono" style={{ color: C.ink }}>{money(effectiveWrestlerSalary(wrestler))}/wk</span>{wrestler.informalPay && <span className="wgm-mono" style={{ color: C.inkFaint }}> (of {money(wrestler.salary)})</span>}</span>
         <span>Contract: <span className="wgm-mono" style={{ color: wrestler.contractWeeksLeft <= 4 ? C.rope : C.ink }}>{wrestler.contractWeeksLeft}wk</span></span>
       </div>
+      {wrestler.informalPay && (
+        <p className="text-[10px] mb-4" style={{ color: C.inkFaint }}>Signed before the promotion went legit — working under the table until you run a real show off the backyard.</p>
+      )}
 
       {wrestler.storyline && wrestler.storyline.length > 0 && (
         <div className="mb-4">
@@ -5307,7 +5859,7 @@ function WrestlerModal({ wrestler, titles, tagTeams, stables, relationships, onC
   );
 }
 
-function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, reputation }) {
+function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, reputation, venueGraduated }) {
   const [termId, setTermId] = useState('standard');
   const [bonusPct, setBonusPct] = useState(1);
   const [wagePct, setWagePct] = useState(1);
@@ -5399,6 +5951,9 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, repu
       <div className="flex items-center justify-between text-xs mb-2" style={{ color: C.inkFaint }}>
         <span>Asking Salary: <span className="wgm-mono" style={{ color: C.ink }}>{money(wrestler.salary)}/wk</span></span>
       </div>
+      {!venueGraduated && (
+        <p className="text-[11px] mb-3 italic" style={{ color: C.goldSoft }}>You haven't run a show off the backyard yet — sign them now and they'll work informal terms (about {money(Math.max(20, Math.round(wrestler.salary * INFORMAL_PAY_RATE)))}/wk) until you do.</p>
+      )}
       {wrestler.discoveredVia && (
         <p className="text-[11px] mb-3" style={{ color: C.inkFaint }}>Found: {wrestler.discoveredVia}</p>
       )}
@@ -5449,19 +6004,41 @@ function FreeAgentModal({ wrestler, onClose, onSign, funds, bossReputation, repu
   );
 }
 
-function FreeStaffModal({ staffMember, onClose, onHire, funds }) {
-  const cost = Math.round(staffMember.salary * 1.5);
+function FreeStaffModal({ staffMember, onClose, onHire, funds, reputation }) {
+  const [termId, setTermId] = useState('standard');
+  const [bonusPct, setBonusPct] = useState(1);
+  const [wagePct, setWagePct] = useState(1);
+  const [contractWeeks, setContractWeeks] = useState(20);
+  const term = STAFF_CONTRACT_TERMS.find((t) => t.id === termId) || STAFF_CONTRACT_TERMS[0];
+  const cost = Math.round(staffMember.salary * 1.5 * term.bonusMult * bonusPct);
+  const weeklyWage = Math.round(staffMember.salary * wagePct);
+  const offerQuality = (bonusPct + wagePct) / 2;
   return (
     <Modal title={staffMember.name} onClose={onClose}>
       <div className="flex items-center gap-2 mb-4">
         <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: C.steel }}>
           {staffMember.role === 'Announcer' ? <Radio size={15} color="white" /> : staffMember.role === 'Referee' ? <Shield size={15} color="white" /> : staffMember.role === 'Writer' ? <Newspaper size={15} color="white" /> : staffMember.role === 'Road Agent' ? <Truck size={15} color="white" /> : <Mic size={15} color="white" />}
         </div>
-        <p className="text-xs italic" style={{ color: C.inkFaint }}>{staffMember.role}</p>
+        <p className="text-xs italic" style={{ color: C.inkFaint }}>{staffMember.role}{staffMember.formerWrestler ? ' · Former Wrestler' : ''}</p>
       </div>
 
-      <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.ink }}>
-        <StatBar label="QUALITY" value={staffMember.quality} />
+      {staffMember.character && (
+        <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.canvasAlt }}>
+          <p className="wgm-mono text-[10px] mb-1.5" style={{ color: C.inkFaint }}>ABOUT</p>
+          <p className="text-[12px] mb-2" style={{ color: C.ink }}>{characterReadout(staffMember.character)}</p>
+          <p className="text-[11px] italic" style={{ color: C.inkFaint }}>{backgroundSummary(staffMember.character)}</p>
+          {staffMember.character.lifetimeDream && (
+            <p className="text-[11px] mt-2 pt-2" style={{ color: C.goldSoft, borderTop: `1px solid ${C.line}` }}>Lifetime Dream: {staffMember.character.lifetimeDream}</p>
+          )}
+        </div>
+      )}
+
+      <div className="rounded-lg p-3 mb-4 space-y-2" style={{ backgroundColor: C.ink }}>
+        {(STAFF_ROLE_STATS[staffMember.role] || []).map((k) => (
+          <StatBar key={k} label={(STAFF_STAT_LABELS[k] || k).toUpperCase()} value={(staffMember.stats && staffMember.stats[k]) || 0} />
+        ))}
+        <div className="h-px my-2" style={{ backgroundColor: C.inkFaint }} />
+        <StatBar label="OVERALL QUALITY" value={staffMember.quality} accent="#3E5C8A" />
       </div>
 
       {staffMember.trait && (
@@ -5487,11 +6064,51 @@ function FreeStaffModal({ staffMember, onClose, onHire, funds }) {
         </div>
       )}
 
-      <div className="flex items-center justify-between text-xs mb-5" style={{ color: C.inkFaint }}>
+      <div className="flex items-center justify-between text-xs mb-2" style={{ color: C.inkFaint }}>
         <span>Asking Salary: <span className="wgm-mono" style={{ color: C.ink }}>{money(staffMember.salary)}/wk</span></span>
       </div>
 
-      <PrimaryButton full icon={UserPlus} onClick={() => onHire(staffMember.role, staffMember.id)} disabled={funds < cost}>Hire for {money(cost)}</PrimaryButton>
+      <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>NEGOTIATE THE CONTRACT</p>
+      {(staffMember.storyline || []).some((e) => e.type === 'promise' && e.valence < 0 && (e.importance || 0) >= 6) && (
+        <p className="text-[11px] mb-2 italic" style={{ color: C.rope }}>They remember a promise that didn't get kept — expect some skepticism on the Job Security Clause.</p>
+      )}
+      <div className="space-y-2 mb-4">
+        {STAFF_CONTRACT_TERMS.map((t) => {
+          const fit = negotiationFit(staffMember.character, t.id, offerQuality, reputation, contractWeeks, staffMember.storyline);
+          return (
+            <button key={t.id} onClick={() => setTermId(t.id)} className="w-full rounded-lg p-2.5 text-left" style={{ backgroundColor: termId === t.id ? C.gold : C.canvasAlt, border: `1px solid ${C.line}` }}>
+              <p className="text-xs font-bold" style={{ color: C.ink }}>{t.label}</p>
+              <p className="text-[10px]" style={{ color: termId === t.id ? C.inkSoft : C.inkFaint }}>{t.blurb}</p>
+              <p className="text-[10px] italic mt-1" style={{ color: termId === t.id ? C.inkSoft : (fit >= 45 ? C.good : C.rope) }}>{negotiationFitHint(fit)}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>SIGNING BONUS</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{money(cost)} ({Math.round(bonusPct * 100)}%)</span>
+        </div>
+        <input type="range" min="0.5" max="1.5" step="0.05" value={bonusPct} onChange={(e) => setBonusPct(Number(e.target.value))} className="w-full" />
+      </div>
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>WEEKLY WAGE</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{money(weeklyWage)}/wk ({Math.round(wagePct * 100)}%)</span>
+        </div>
+        <input type="range" min="0.8" max="1.3" step="0.05" value={wagePct} onChange={(e) => setWagePct(Number(e.target.value))} className="w-full" />
+      </div>
+      <div className="mb-4">
+        <div className="flex items-center justify-between mb-1">
+          <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>CONTRACT LENGTH</span>
+          <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{contractWeeks} weeks</span>
+        </div>
+        <input type="range" min="8" max="40" step="2" value={contractWeeks} onChange={(e) => setContractWeeks(Number(e.target.value))} className="w-full" />
+      </div>
+      <p className="text-[11px] mb-3" style={{ color: C.inkFaint }}>A bad fit isn't a guaranteed no — but the further off it is, the more likely they walk.</p>
+
+      <PrimaryButton full icon={UserPlus} onClick={() => onHire(staffMember.role, staffMember.id, termId, bonusPct, wagePct, contractWeeks)} disabled={funds < cost}>Hire for {money(cost)}</PrimaryButton>
     </Modal>
   );
 }
@@ -5505,23 +6122,68 @@ function StaffTraitBadge({ id }) {
   return <span className="wgm-mono text-[9px] px-1.5 py-0.5 rounded inline-block mt-1" style={{ backgroundColor: t.polarity === 'positive' ? 'rgb(var(--wgm-gold-rgb, 196 146 46) / 0.18)' : 'rgb(var(--wgm-rope-rgb, 172 58 44) / 0.14)', color: t.polarity === 'positive' ? C.gold : C.rope }}>{t.label}</span>;
 }
 
-function StaffRow({ s, role, funds, onFire, onRaise }) {
+function StaffRow({ s, role, funds, onFire, onRaise, onRenew, onSpendSkillPoint }) {
+  const [expanded, setExpanded] = useState(false);
   const amb = s.ambition;
   const raiseCost = Math.round(s.salary * 3);
   const roleColor = role === 'Announcer' ? '#3E5C8A' : role === 'Referee' ? C.gold : role === 'Writer' ? '#6B4E9E' : role === 'Road Agent' ? C.rope : C.steel;
+  const contractWeeksLeft = s.contractWeeksLeft !== undefined && s.contractWeeksLeft !== null ? s.contractWeeksLeft : null;
+  const topMemory = wrestlerDefiningMemory(s.storyline);
+  const roleStatKeys = STAFF_ROLE_STATS[role] || [];
   return (
     <div className="wgm-index-card rounded-lg p-3" style={{ backgroundColor: C.cream, border: `1px solid ${amb && amb.status === 'holdout' ? C.rope : C.line}`, borderLeftWidth: 5, borderLeftColor: roleColor }}>
-      <div className="flex items-center gap-3">
+      <button onClick={() => setExpanded((v) => !v)} className="w-full flex items-center gap-3 text-left">
         <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ backgroundColor: C.steel }}>
           {role === 'Announcer' ? <Radio size={15} color="white" /> : role === 'Referee' ? <Shield size={15} color="white" /> : role === 'Writer' ? <Newspaper size={15} color="white" /> : role === 'Road Agent' ? <Truck size={15} color="white" /> : <Mic size={15} color="white" />}
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate" style={{ color: C.ink }}>{s.name}</p>
-          <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{role.toUpperCase()} · QUALITY {s.quality} · {money(s.salary)}/wk</p>
+          <p className="text-sm font-semibold truncate" style={{ color: C.ink }}>{s.name}{s.formerWrestler ? ' 🎖' : ''}</p>
+          <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>{role.toUpperCase()} · LV{s.level || 1} · QUALITY {s.quality} · {money(s.salary)}/wk{contractWeeksLeft !== null ? ` · ${contractWeeksLeft}WK LEFT` : ''}</p>
           {s.trait && <StaffTraitBadge id={s.trait} />}
         </div>
-        <GhostButton danger onClick={() => onFire(role, s.id)}>Fire</GhostButton>
-      </div>
+        <ChevronDown size={14} color={C.inkFaint} style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
+      </button>
+
+      {expanded && s.character && (
+        <div className="mt-2 pt-2 rounded-md p-2" style={{ borderTop: `1px solid ${C.line}`, backgroundColor: C.canvasAlt }}>
+          <p className="text-[11px] mb-1.5" style={{ color: C.ink }}>{characterReadout(s.character)}</p>
+          <p className="text-[10px] italic mb-1.5" style={{ color: C.inkFaint }}>{backgroundSummary(s.character)}</p>
+          {topMemory && <p className="text-[10px]" style={{ color: C.goldSoft }}>What they remember most: {topMemory.text}</p>}
+        </div>
+      )}
+
+      {expanded && s.stats && (
+        <div className="mt-2 pt-2 rounded-md p-2 space-y-1.5" style={{ borderTop: `1px solid ${C.line}`, backgroundColor: C.ink }}>
+          {roleStatKeys.map((k) => (
+            <StatBar key={k} label={(STAFF_STAT_LABELS[k] || k).toUpperCase()} value={s.stats[k] || 0} />
+          ))}
+        </div>
+      )}
+
+      {expanded && (
+        <div className="mt-2 pt-2 rounded-md p-2" style={{ borderTop: `1px solid ${C.line}`, backgroundColor: C.canvasAlt }}>
+          <div className="flex items-center justify-between mb-1.5">
+            <p className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>DEVELOPMENT — LEVEL {s.level || 1}</p>
+            <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>{s.xp || 0}/{xpToNextLevel(s.level || 1)} XP</span>
+          </div>
+          <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: C.canvas }}>
+            <div className="h-full rounded-full" style={{ width: `${clamp(((s.xp || 0) / xpToNextLevel(s.level || 1)) * 100, 0, 100)}%`, backgroundColor: C.gold }} />
+          </div>
+          {(s.skillPoints || 0) > 0 && onSpendSkillPoint && (
+            <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+              <p className="text-[11px] mb-1.5" style={{ color: C.ink }}>{s.skillPoints} skill point{s.skillPoints > 1 ? 's' : ''} to spend:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {roleStatKeys.map((k) => (
+                  <button key={k} onClick={() => onSpendSkillPoint(role, s.id, k)} className="rounded-md py-1.5 px-2 text-[10px] font-semibold" style={{ backgroundColor: C.gold, color: C.ink }}>
+                    +3 {STAFF_STAT_LABELS[k] || k}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {amb && (
         <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
           <div className="flex items-center justify-between mb-1">
@@ -5532,7 +6194,13 @@ function StaffRow({ s, role, funds, onFire, onRaise }) {
           <div className="h-1 rounded-full overflow-hidden mb-2" style={{ backgroundColor: C.canvasAlt }}>
             <div className="h-full rounded-full" style={{ width: `${amb.satisfaction}%`, backgroundColor: amb.satisfaction < 20 ? C.rope : amb.satisfaction < 40 ? C.goldSoft : C.good }} />
           </div>
-          <GhostButton onClick={() => onRaise(role, s.id)} disabled={funds < raiseCost}>Give Raise ({money(raiseCost)})</GhostButton>
+          <div className="flex gap-2">
+            <GhostButton onClick={() => onRaise(role, s.id)} disabled={funds < raiseCost}>Give Raise ({money(raiseCost)})</GhostButton>
+            {contractWeeksLeft !== null && contractWeeksLeft <= 6 && onRenew && (
+              <GhostButton icon={Check} onClick={() => onRenew(role, s.id)} disabled={funds < s.salary}>Renew ({money(s.salary)})</GhostButton>
+            )}
+            <GhostButton danger onClick={() => onFire(role, s.id)}>Fire</GhostButton>
+          </div>
         </div>
       )}
     </div>
@@ -5542,7 +6210,7 @@ function StaffRow({ s, role, funds, onFire, onRaise }) {
 /* ============================================================
    BOOK SHOW TAB
    ============================================================ */
-function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, company, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onRun, onRepairRing, onRestockSupplies, onSkipDay, onSkipToShowDay, onEndWeekWithoutShow }) {
+function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, healthyRoster, titles, feuds, funds, company, onUpdateDraft, onOpenMatchBuilder, onOpenPromoBuilder, onRemove, onMove, onEdit, onRun, onRepairRing, onRestockSupplies, onSkipDay, onSkipToShowDay, onEndWeekWithoutShow }) {
   const [venueEditorOpen, setVenueEditorOpen] = useState(false);
   const wrestlerName = (id) => (roster.find((r) => r.id === id) || {}).name || '???';
   const wrestlerBilling = (id) => {
@@ -5628,6 +6296,46 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
         </div>
       </div>
 
+      {(company.concessionsMenu || []).length > 0 && (() => {
+        const forecast = concessionsForecastInfo(draftShow.concessionsForecastRoll || 1);
+        const orderTotalCost = sum((company.concessionsMenu || []).map((e) => {
+          const item = CONCESSION_ITEMS_CATALOG.find((i) => i.id === e.itemId);
+          const qty = (draftShow.concessionsOrder || {})[e.itemId] || 0;
+          return item ? item.baseCost * qty : 0;
+        }));
+        return (
+          <div>
+            <SectionTitle icon={Coffee} sub={forecast.label}>Concessions Stand</SectionTitle>
+            <p className="text-[11px] mb-2 italic" style={{ color: C.inkFaint }}>{forecast.hint}</p>
+            <div className="space-y-2">
+              {company.concessionsMenu.map((entry) => {
+                const item = CONCESSION_ITEMS_CATALOG.find((i) => i.id === entry.itemId);
+                if (!item) return null;
+                const qty = (draftShow.concessionsOrder || {})[entry.itemId] || 0;
+                const cost = Math.round(item.baseCost * qty);
+                return (
+                  <div key={item.id} className="rounded-lg p-2.5" style={{ backgroundColor: C.cream, border: `1px solid ${C.line}` }}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold" style={{ color: C.ink }}>{item.name}</span>
+                      <span className="wgm-mono text-[10px]" style={{ color: C.inkFaint }}>{money(entry.price)}/ea</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range" min="0" max="600" step="10"
+                        value={qty} onChange={(e) => onUpdateDraft({ concessionsOrder: { ...(draftShow.concessionsOrder || {}), [entry.itemId]: Number(e.target.value) } })}
+                        className="flex-1"
+                      />
+                      <span className="wgm-mono text-[10px] w-20 text-right" style={{ color: C.inkFaint }}>{qty} ({money(cost)})</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="wgm-mono text-[9px] mt-1.5" style={{ color: C.inkFaint }}>Order cost tonight: {money(orderTotalCost)} — paid whether or not it all sells.</p>
+          </div>
+        );
+      })()}
+
       <div className="wgm-ticket rounded-lg p-3 grid grid-cols-3 gap-2 text-center" style={{ backgroundColor: C.canvasAlt }}>
         <div><p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>EST. FANS</p><p className="wgm-display text-base" style={{ color: C.ink }}>{estimate.attendance.toLocaleString()}</p></div>
         <div><p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>REVENUE</p><p className="wgm-display text-base" style={{ color: C.good }}>{money(estimate.revenue)}</p></div>
@@ -5687,6 +6395,7 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
                     {isMainEvent ? 'MAIN EVENT' : `BOUT ${i + 1}`}{item.kind === 'promo' ? ' · SPECIAL ATTRACTION' : ''}
                   </span>
                   <div className="flex items-center gap-1">
+                    <button onClick={() => onEdit(i)} className="p-1 rounded" style={{ backgroundColor: C.canvasAlt }}><Pencil size={11} color={C.inkFaint} /></button>
                     <button onClick={() => onMove(i, -1)} disabled={i === 0} className="p-1 rounded disabled:opacity-20"><ChevronUp size={12} color={C.inkFaint} /></button>
                     <button onClick={() => onMove(i, 1)} disabled={i === draftShow.card.length - 1} className="p-1 rounded disabled:opacity-20"><ChevronDown size={12} color={C.inkFaint} /></button>
                     <button onClick={() => onRemove(i)} className="p-1 rounded" style={{ backgroundColor: C.ropeDark }}><X size={11} color={C.cream} /></button>
@@ -5696,6 +6405,19 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
                 {title && <p className="wgm-display text-sm text-center mb-1" style={{ color: C.rope }}>{title.name.toUpperCase()} MATCH</p>}
                 {blowOffFeud && <p className="wgm-mono text-[9px] text-center mb-1 font-bold" style={{ color: C.rope }}>BLOW-OFF: THE FEUD SETTLES TONIGHT</p>}
                 <p className="wgm-mono text-[9px] text-center mb-2" style={{ color: C.inkFaint }}>{(ALL_MATCH_TYPES.find((m) => m.id === item.typeId) || {}).label || `PROMO · ${item.purpose}`}</p>
+
+                {isMainEvent && item.participantIds.map((pid) => {
+                  const w = roster.find((r) => r.id === pid);
+                  if (!w || (CARD_TIER_RANK[w.tier] ?? 2) > 1) return null;
+                  const confident = (w.confidence || 50) >= 70;
+                  return (
+                    <p key={pid} className="text-[10px] text-center mb-2 italic" style={{ color: confident ? C.gold : C.rope }}>
+                      {confident
+                        ? `${w.name} seems genuinely eager for a shot this big.`
+                        : `${w.name} doesn't seem sure they're ready for a spot this big — might need reassurance either way.`}
+                    </p>
+                  );
+                })}
 
                 {item.kind === 'match' && item.participantIds.length === 2 ? (
                   <div className="flex items-center gap-2">
@@ -5762,7 +6484,7 @@ function BookShowTab({ draftShow, draftVenue, unlocked, estimate, roster, health
 /* ============================================================
    MATCH BUILDER MODAL
    ============================================================ */
-function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedResearch, onClose, onAdd }) {
+function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedResearch, initial, onClose, onAdd }) {
   const availableTypes = [...MATCH_TYPES, ...RESEARCHABLE_MATCH_TYPES.filter((t) => (unlockedResearch || []).includes(t.id))];
   const styleTypes = style && STYLE_CONFIG[style]
     ? [...availableTypes].sort((a, b) => {
@@ -5771,13 +6493,22 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedRes
         return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
       })
     : availableTypes;
-  const [typeId, setTypeId] = useState(styleTypes[0].id);
-  const [selected, setSelected] = useState([]);
-  const [winnerIds, setWinnerIds] = useState([]);
-  const [sideMap, setSideMap] = useState({});
-  const [finishId, setFinishId] = useState('clean');
-  const [titleId, setTitleId] = useState('');
-  const [feudBlowOffId, setFeudBlowOffId] = useState('');
+  const isEdit = !!initial;
+  const [typeId, setTypeId] = useState(initial ? initial.typeId : styleTypes[0].id);
+  const [selected, setSelected] = useState(initial ? initial.participantIds : []);
+  const [winnerIds, setWinnerIds] = useState(initial ? initial.winnerIds : []);
+  const [sideMap, setSideMap] = useState(() => {
+    if (initial && initial.sides) {
+      const map = {};
+      (initial.sides[0] || []).forEach((id) => { map[id] = 'A'; });
+      (initial.sides[1] || []).forEach((id) => { map[id] = 'B'; });
+      return map;
+    }
+    return {};
+  });
+  const [finishId, setFinishId] = useState(initial ? initial.finishId : 'clean');
+  const [titleId, setTitleId] = useState(initial && initial.titleId ? initial.titleId : '');
+  const [feudBlowOffId, setFeudBlowOffId] = useState(initial && initial.feudBlowOffId ? initial.feudBlowOffId : '');
   const type = availableTypes.find((m) => m.id === typeId) || availableTypes[0];
   const isSidesMatch = !!type.sides;
   const sideSize = type.sideSize || 2;
@@ -5834,7 +6565,7 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedRes
   const activeFeudBlowOffId = eligibleFeuds.some((f) => f.id === feudBlowOffId) ? feudBlowOffId : '';
 
   return (
-    <Modal title="Add Match" onClose={onClose} wide>
+    <Modal title={isEdit ? 'Edit Match' : 'Add Match'} onClose={onClose} wide>
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>MATCH TYPE</p>
       <div className="grid grid-cols-2 gap-2 mb-4">
         {styleTypes.map((m) => (
@@ -5934,7 +6665,7 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedRes
         </>
       )}
 
-      <PrimaryButton full disabled={!canAdd} onClick={() => onAdd({ kind: 'match', id: uid(), typeId, participantIds: selected, winnerIds, finishId, titleId: titleId || null, feudBlowOffId: activeFeudBlowOffId || null, sides: isSidesMatch ? [sideAIds, sideBIds] : null })}>Add to Card</PrimaryButton>
+      <PrimaryButton full disabled={!canAdd} onClick={() => onAdd({ kind: 'match', id: initial ? initial.id : uid(), typeId, participantIds: selected, winnerIds, finishId, titleId: titleId || null, feudBlowOffId: activeFeudBlowOffId || null, sides: isSidesMatch ? [sideAIds, sideBIds] : null })}>{isEdit ? 'Save Changes' : 'Add to Card'}</PrimaryButton>
     </Modal>
   );
 }
@@ -5942,11 +6673,12 @@ function MatchBuilderModal({ roster, titles, tagTeams, feuds, style, unlockedRes
 /* ============================================================
    PROMO BUILDER MODAL
    ============================================================ */
-function PromoBuilderModal({ roster, staff, feuds, writerTierLevel, onClose, onAdd }) {
-  const [selected, setSelected] = useState([]);
-  const [purpose, setPurpose] = useState(PROMO_PURPOSES[0]);
-  const [hostStaffId, setHostStaffId] = useState('');
-  const [storyBeatId, setStoryBeatId] = useState('');
+function PromoBuilderModal({ roster, staff, feuds, writerTierLevel, initial, onClose, onAdd }) {
+  const isEdit = !!initial;
+  const [selected, setSelected] = useState(initial ? initial.participantIds : []);
+  const [purpose, setPurpose] = useState(initial ? initial.purpose : PROMO_PURPOSES[0]);
+  const [hostStaffId, setHostStaffId] = useState(initial && initial.hostStaffId ? initial.hostStaffId : '');
+  const [storyBeatId, setStoryBeatId] = useState(initial && initial.storyBeatId ? initial.storyBeatId : '');
   const allStaff = [...(staff ? staff.announcers : []), ...(staff ? staff.commentators : [])];
   const matchedFeud = (feuds || []).find((f) => f.status !== 'ended' && feudPairPresent(f, selected));
   const beatsUnlocked = (writerTierLevel || 0) >= 2 && !!matchedFeud;
@@ -5956,7 +6688,7 @@ function PromoBuilderModal({ roster, staff, feuds, writerTierLevel, onClose, onA
   }
 
   return (
-    <Modal title="Add Promo Segment" onClose={onClose} wide>
+    <Modal title={isEdit ? 'Edit Promo Segment' : 'Add Promo Segment'} onClose={onClose} wide>
       <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>PURPOSE</p>
       <div className="grid grid-cols-2 gap-2 mb-4">
         {PROMO_PURPOSES.map((p) => (
@@ -6015,7 +6747,7 @@ function PromoBuilderModal({ roster, staff, feuds, writerTierLevel, onClose, onA
         </div>
       )}
 
-      <PrimaryButton full disabled={selected.length === 0} onClick={() => onAdd({ kind: 'promo', id: uid(), participantIds: selected, purpose, hostStaffId: hostStaffId || null, storyBeatId: (beatsUnlocked && storyBeatId) || null, feudId: matchedFeud ? matchedFeud.id : null })}>Add to Card</PrimaryButton>
+      <PrimaryButton full disabled={selected.length === 0} onClick={() => onAdd({ kind: 'promo', id: initial ? initial.id : uid(), participantIds: selected, purpose, hostStaffId: hostStaffId || null, storyBeatId: (beatsUnlocked && storyBeatId) || null, feudId: matchedFeud ? matchedFeud.id : null })}>{isEdit ? 'Save Changes' : 'Add to Card'}</PrimaryButton>
     </Modal>
   );
 }
@@ -6063,6 +6795,32 @@ function ShowResultModal({ result, roster, onClose }) {
           <span className="wgm-mono text-[11px]" style={{ color: result.repDelta >= 0 ? C.good : C.rope }}>{result.repDelta >= 0 ? '+' : ''}{result.repDelta} reputation</span>
         </div>
       </div>
+
+      {result.concessionsQtySold && Object.values(result.concessionsQtySold).some((q) => q > 0) && (() => {
+        const appetiteInfo = concessionsForecastInfo(result.concessionsAppetiteMult || 1);
+        const totalWasted = sum(Object.values(result.concessionsWasted || {}));
+        return (
+          <div className="rounded-lg p-3 mb-4" style={{ backgroundColor: C.cream, border: `1px solid ${C.line}` }}>
+            <p className="wgm-mono text-[10px] mb-2" style={{ color: C.inkFaint }}>THE STANDS TONIGHT — TURNED OUT TO BE A "{appetiteInfo.label.toUpperCase()}" NIGHT</p>
+            <div className="space-y-1">
+              {CONCESSION_ITEMS_CATALOG.filter((item) => (result.concessionsQtySold[item.id] || 0) > 0 || (result.concessionsWasted[item.id] || 0) > 0).map((item) => {
+                const sold = result.concessionsQtySold[item.id] || 0;
+                const wasted = result.concessionsWasted[item.id] || 0;
+                const soldOut = (result.concessionsSoldOutItemIds || []).includes(item.id);
+                return (
+                  <div key={item.id} className="flex items-center justify-between text-[11px]">
+                    <span style={{ color: C.ink }}>{item.name}</span>
+                    <span style={{ color: soldOut ? C.gold : wasted > 0 ? C.rope : C.inkFaint }}>
+                      {soldOut ? `Sold out — ${sold} sold` : wasted > 0 ? `${sold} sold, ${wasted} wasted` : `${sold} sold`}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {totalWasted > 0 && <p className="text-[10px] mt-2" style={{ color: C.inkFaint }}>{totalWasted} units went unsold tonight — that's money spent on stock that never left the cooler.</p>}
+          </div>
+        );
+      })()}
 
       <div className="space-y-2 mb-2">
         {result.matchResults.map((m, i) => (
@@ -6463,7 +7221,7 @@ function ShopTab({
   onPurchaseUpgrade,
   onPurchaseRingShape, onEquipRingShape,
   onAddConcession, onSetConcessionPrice, onRemoveConcession,
-  onAddMerch, onSetMerchPrice, onSetMerchWrestler, onSetMerchAllocation, onRemoveMerch,
+  onAddMerch, onSetMerchPrice, onSetMerchWrestler, onSetMerchAllocation, onRemoveMerch, onPlaceMerchOrder,
   onPurchaseWeaponItem, onStartResearch,
   onSignTv,
 }) {
@@ -6580,6 +7338,7 @@ function ShopTab({
         <MenuBuilder
           catalog={MERCH_ITEMS_CATALOG} menu={company.merchMenu} funds={company.funds} roster={roster}
           onAdd={onAddMerch} onSetPrice={onSetMerchPrice} onRemove={onRemoveMerch} onSetWrestler={onSetMerchWrestler} onSetAllocation={onSetMerchAllocation}
+          onPlaceOrder={onPlaceMerchOrder}
           isMerch
         />
       )}
@@ -6669,11 +7428,36 @@ function ShopTab({
   );
 }
 
-function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove, onSetWrestler, onSetAllocation, isMerch }) {
+function MerchOrderRow({ item, entry, funds, onPlaceOrder }) {
+  const [qty, setQty] = useState(50);
+  const cost = Math.round(item.baseCost * qty);
+  const stock = entry.stock || 0;
+  return (
+    <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
+      <div className="flex items-center justify-between mb-1.5">
+        <p className="wgm-mono text-[9px]" style={{ color: C.inkFaint }}>STOCK ON HAND</p>
+        <span className="wgm-mono text-[10px] font-bold" style={{ color: stock === 0 ? C.rope : C.ink }}>{stock === 0 ? 'NONE — PLACE AN ORDER' : `${stock} UNITS`}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="range" min="10" max="500" step="10"
+          value={qty} onChange={(e) => setQty(Number(e.target.value))} className="flex-1"
+        />
+        <span className="wgm-mono text-[10px] w-12 text-right" style={{ color: C.inkFaint }}>{qty}</span>
+      </div>
+      <div className="flex items-center justify-between mt-1.5">
+        <p className="text-[10px]" style={{ color: C.inkFaint }}>Order {qty} for {money(cost)}</p>
+        <GhostButton icon={Plus} onClick={() => onPlaceOrder(item.id, qty)} disabled={funds < cost}>Place Order</GhostButton>
+      </div>
+    </div>
+  );
+}
+
+function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove, onSetWrestler, onSetAllocation, onPlaceOrder, isMerch }) {
   return (
     <div>
       <p className="text-xs mb-3" style={{ color: C.inkFaint }}>
-        {isMerch ? `Pick what you sell and set your own prices. Assign it to wrestlers with at least ${MERCH_MIN_POPULARITY} popularity and they'll split a 15% cut — a great way to keep stars happy.` : 'Pick what you sell and set your own prices per show.'}
+        {isMerch ? `Pick what you sell, set your price, and place an order for how many units to have on hand — you can only sell what's actually in stock. Assign it to wrestlers with at least ${MERCH_MIN_POPULARITY} popularity and they'll split a 15% cut of what sells.` : `Pick what you sell and set your price here. How much to actually stock for each show — and the gamble that comes with it — happens in the Book tab.`}
       </p>
       <div className="space-y-2">
         {catalog.map((item) => {
@@ -6700,8 +7484,11 @@ function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove
                       value={entry.price} onChange={(e) => onSetPrice(item.id, Number(e.target.value))} className="flex-1"
                     />
                   </div>
+                  {isMerch && !item.isAwareness && onPlaceOrder && (
+                    <MerchOrderRow item={item} entry={entry} funds={funds} onPlaceOrder={onPlaceOrder} />
+                  )}
                   {isMerch && (
-                    <div className="mb-2">
+                    <div className="mb-2 mt-2 pt-2" style={{ borderTop: `1px solid ${C.line}` }}>
                       <p className="wgm-mono text-[9px] mb-1.5" style={{ color: C.inkFaint }}>ASSIGNED TALENT ({(entry.wrestlerIds || []).length}) — {MERCH_MIN_POPULARITY}+ POP REQUIRED</p>
                       <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto wgm-scrollbar">
                         {roster.filter((w) => w.popularity >= MERCH_MIN_POPULARITY).length === 0 && (
@@ -6716,26 +7503,31 @@ function MenuBuilder({ catalog, menu, funds, roster, onAdd, onSetPrice, onRemove
                           );
                         })}
                       </div>
-                      {(entry.wrestlerIds || []).length > 1 && onSetAllocation && (
-                        <div className="mt-2 pt-2 space-y-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
-                          <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>ROYALTY SPLIT — drag to favor one over another (defaults to popularity share)</p>
-                          {(entry.wrestlerIds || []).map((wid) => {
-                            const w = roster.find((r) => r.id === wid);
-                            if (!w) return null;
-                            const weight = (entry.allocations || {})[wid] || 0;
-                            return (
-                              <div key={wid} className="flex items-center gap-2">
-                                <span className="text-[10px] w-24 truncate" style={{ color: C.inkFaint }}>{w.name}</span>
-                                <input
-                                  type="range" min="0" max="100" step="5"
-                                  value={weight} onChange={(e) => onSetAllocation(item.id, wid, Number(e.target.value))} className="flex-1"
-                                />
-                                <span className="wgm-mono text-[9px] w-6 text-right" style={{ color: C.inkFaint }}>{weight}</span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                      {(entry.wrestlerIds || []).length > 1 && onSetAllocation && (() => {
+                        const assignedWrestlers = (entry.wrestlerIds || []).map((wid) => roster.find((r) => r.id === wid)).filter(Boolean);
+                        const weightSum = sum(assignedWrestlers.map((w) => (entry.allocations || {})[w.id] || 0));
+                        const stock = entry.stock || 0;
+                        return (
+                          <div className="mt-2 pt-2 space-y-1.5" style={{ borderTop: `1px solid ${C.line}` }}>
+                            <p className="wgm-mono text-[9px] mb-1" style={{ color: C.inkFaint }}>SPLIT OF THE ORDER — drag to favor one over another (defaults to popularity share)</p>
+                            {assignedWrestlers.map((w) => {
+                              const weight = (entry.allocations || {})[w.id] || 0;
+                              const share = weightSum > 0 ? weight / weightSum : 1 / assignedWrestlers.length;
+                              const projectedUnits = Math.round(stock * share);
+                              return (
+                                <div key={w.id} className="flex items-center gap-2">
+                                  <span className="text-[10px] w-24 truncate" style={{ color: C.inkFaint }}>{w.name}</span>
+                                  <input
+                                    type="range" min="0" max="100" step="5"
+                                    value={weight} onChange={(e) => onSetAllocation(item.id, w.id, Number(e.target.value))} className="flex-1"
+                                  />
+                                  <span className="wgm-mono text-[9px] w-16 text-right" style={{ color: C.inkFaint }}>{stock > 0 ? `≈${projectedUnits}u` : `${weight}`}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                   <div className="flex justify-end">
@@ -7092,6 +7884,9 @@ function PoachModal({ wrestler, rival, company, onClose, onPoach }) {
           <span className="wgm-mono text-[10px]" style={{ color: C.ink }}>{money(weeklyWage)}/wk ({Math.round(wagePct * 100)}%)</span>
         </div>
         <input type="range" min="0.8" max="1.3" step="0.05" value={wagePct} onChange={(e) => setWagePct(Number(e.target.value))} className="w-full" />
+        {!company.venueGraduated && (
+          <p className="text-[11px] mt-1.5 italic" style={{ color: C.goldSoft }}>You haven't run a show off the backyard yet — they'd work informal terms (about {money(Math.max(20, Math.round(weeklyWage * INFORMAL_PAY_RATE)))}/wk) until you do.</p>
+        )}
       </div>
       <div className="mb-4">
         <div className="flex items-center justify-between mb-1">
